@@ -6,11 +6,14 @@ FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies including FFmpeg 6 (required for torchcodec)
 RUN apt-get update && apt-get install -y \
-    ffmpeg \
+    software-properties-common \
     libsndfile1 \
     git \
+    && add-apt-repository -y ppa:ubuntuhandbook1/ffmpeg6 \
+    && apt-get update \
+    && apt-get install -y ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
@@ -66,6 +69,7 @@ ENV PYTHONUNBUFFERED=1
 #    (e.g., https://huggingface.co/facebook/sam-audio-large)
 #    The handler auto-detects and uses /runpod-volume/huggingface-cache/hub
 # 2. HF_TOKEN: Set at runtime for downloading gated models on-demand
+
 
 # Start the handler
 CMD ["python", "-u", "handler.py"]
