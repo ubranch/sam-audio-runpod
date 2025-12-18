@@ -41,8 +41,8 @@ if CACHE_ROOT.exists():
     os.environ["HF_HUB_CACHE"] = str(CACHE_ROOT)
     os.environ["HF_HOME"] = str(CACHE_ROOT.parent)
     # Force offline mode - only load from cache
-    os.environ["HF_HUB_OFFLINE"] = "1"
-    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    # os.environ["HF_HUB_OFFLINE"] = "1"
+    # os.environ["TRANSFORMERS_OFFLINE"] = "1"
 else:
     print(f"RunPod cache not found at {CACHE_ROOT}, will download models")
 
@@ -113,8 +113,8 @@ def load_model(model_size: str = "large"):
     if snapshot_path:
         # Load from cached snapshot (offline)
         print(f"Loading SAM Audio model from cache (size: {model_size}) on device: {DEVICE}")
-        MODEL = SAMAudio.from_pretrained(str(snapshot_path), local_files_only=True).to(DEVICE).eval()
-        PROCESSOR = SAMAudioProcessor.from_pretrained(str(snapshot_path), local_files_only=True)
+        MODEL = SAMAudio.from_pretrained(str(snapshot_path)).to(DEVICE).eval()
+        PROCESSOR = SAMAudioProcessor.from_pretrained(str(snapshot_path))
     else:
         # Fall back to downloading (requires HF_TOKEN for gated models)
         hf_token = os.environ.get("HF_TOKEN")
