@@ -55,8 +55,8 @@ RUN pip install --no-cache-dir \
     torchaudio==2.5.1 \
     --index-url https://download.pytorch.org/whl/cu124
 
-# Reinstall torchcodec to get version compatible with PyTorch 2.5
-RUN pip install --no-cache-dir --force-reinstall torchcodec
+# Reinstall torchcodec 0.2.x (required for PyTorch 2.5)
+RUN pip install --no-cache-dir --force-reinstall "torchcodec>=0.2"
 
 # Verify PyTorch version and imports
 RUN python -c "import torch; print(f'PyTorch: {torch.__version__}'); assert torch.__version__.startswith('2.5'), f'Need PyTorch 2.5+, got {torch.__version__}'"

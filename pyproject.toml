@@ -10,8 +10,8 @@ dependencies = [
     "soundfile",
     "requests",
     
-    # Audio processing
-    "torchcodec",
+    # Audio processing (torchcodec 0.2.x for PyTorch 2.5)
+    "torchcodec>=0.2",
     "torchdiffeq",
     "descript-audiotools",
     
