@@ -6,14 +6,16 @@ FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies including FFmpeg 6 (required for torchcodec)
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
-    software-properties-common \
     libsndfile1 \
     git \
-    && add-apt-repository -y ppa:ubuntuhandbook1/ffmpeg6 \
-    && apt-get update \
-    && apt-get install -y ffmpeg \
+    ffmpeg \
+    libavcodec-dev \
+    libavformat-dev \
+    libavutil-dev \
+    libswresample-dev \
+    libswscale-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
@@ -45,12 +47,16 @@ RUN pip install --no-cache-dir --no-deps \
     git+https://github.com/facebookresearch/perception_models.git@unpin-deps \
     git+https://github.com/facebookresearch/sam-audio.git
 
-# Re-ensure PyTorch 2.5+ (ImageBind may have downgraded it)
+# Re-ensure PyTorch 2.5+ and reinstall torchcodec from PyTorch index
+# (ImageBind may have downgraded PyTorch, and torchcodec needs matching ABI)
 RUN pip install --no-cache-dir \
     torch==2.5.1 \
     torchvision==0.20.1 \
     torchaudio==2.5.1 \
     --index-url https://download.pytorch.org/whl/cu124
+
+# Reinstall torchcodec to get version compatible with PyTorch 2.5
+RUN pip install --no-cache-dir --force-reinstall torchcodec
 
 # Verify PyTorch version and imports
 RUN python -c "import torch; print(f'PyTorch: {torch.__version__}'); assert torch.__version__.startswith('2.5'), f'Need PyTorch 2.5+, got {torch.__version__}'"
