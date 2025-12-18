@@ -20,13 +20,23 @@ RUN pip install --no-cache-dir --upgrade pip
 COPY pyproject.toml /app/
 RUN pip install --no-cache-dir .
 
-# Install Facebook Research packages with --no-deps to avoid conflicts
+# Install Facebook Research packages
+# ImageBind needs its deps for import to work, others use --no-deps to avoid conflicts
 RUN pip install --no-cache-dir --no-deps \
     git+https://github.com/facebookresearch/pytorchvideo.git@6cdc929315aab1b5674b6dcf73b16ec99147735f \
-    git+https://github.com/facebookresearch/dacvae.git \
-    git+https://github.com/facebookresearch/ImageBind.git \
+    git+https://github.com/facebookresearch/dacvae.git
+
+# Install ImageBind WITH dependencies (required for import to succeed)
+RUN pip install --no-cache-dir \
+    git+https://github.com/facebookresearch/ImageBind.git
+
+# Install remaining FB packages with --no-deps
+RUN pip install --no-cache-dir --no-deps \
     git+https://github.com/facebookresearch/perception_models.git@unpin-deps \
     git+https://github.com/facebookresearch/sam-audio.git
+
+# Verify ImageBind can be imported
+RUN python -c "from imagebind import data; print('ImageBind import OK')"
 
 # Copy handler code
 COPY handler.py /app/handler.py
