@@ -23,6 +23,9 @@ dependencies = [
     "timm",
     "einops",
     
+    # perception_models dependencies
+    "xformers",
+    
     # Video/decoding
     "eva-decord",
     "pytorch-lightning",
