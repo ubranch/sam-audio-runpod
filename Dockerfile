@@ -16,50 +16,9 @@ RUN apt-get update && apt-get install -y \
 # Install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip
 
-# Install torchaudio to match PyTorch version in base image
-RUN pip install --no-cache-dir torchaudio
-
-# Install core dependencies
-RUN pip install --no-cache-dir \
-    runpod \
-    transformers \
-    scipy \
-    soundfile \
-    requests \
-    einops \
-    sentencepiece \
-    protobuf \
-    timm \
-    xformers \
-    torchcodec \
-    torchdiffeq \
-    descript-audiotools
-
-# Install additional dependencies needed by Facebook packages first
-RUN pip install --no-cache-dir \
-    iopath \
-    decord \
-    ftfy \
-    regex \
-    inflect \
-    unidecode \
-    pytorch-lightning
-
-# Install Facebook Research dependencies one by one
-RUN pip install --no-cache-dir --no-deps \
-    git+https://github.com/facebookresearch/pytorchvideo.git@6cdc929315aab1b5674b6dcf73b16ec99147735f
-
-RUN pip install --no-cache-dir --no-deps \
-    git+https://github.com/facebookresearch/dacvae.git
-
-RUN pip install --no-cache-dir --no-deps \
-    git+https://github.com/facebookresearch/ImageBind.git
-
-RUN pip install --no-cache-dir --no-deps \
-    git+https://github.com/facebookresearch/perception_models.git@unpin-deps
-
-RUN pip install --no-cache-dir --no-deps \
-    git+https://github.com/facebookresearch/sam-audio.git
+# Copy pyproject.toml and install dependencies
+COPY pyproject.toml /app/
+RUN pip install --no-cache-dir .
 
 # Copy handler code
 COPY handler.py /app/handler.py

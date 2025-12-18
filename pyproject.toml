@@ -3,18 +3,37 @@ name = "sam-service"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
+    # Core
+    "runpod",
     "torch",
     "torchaudio",
     "transformers",
     "scipy",
     "soundfile",
+    "requests",
+    
+    # Audio processing
     "torchcodec",
     "torchdiffeq",
     "descript-audiotools",
+    
+    # ImageBind dependencies (must be before ImageBind)
+    "iopath",
+    "ftfy",
+    "regex",
+    "open_clip_torch",
+    "timm",
+    "einops",
+    
+    # Video/decoding
     "eva-decord",
-    "sam-audio @ git+https://github.com/facebookresearch/sam-audio.git",
-    "perception-models @ git+https://github.com/facebookresearch/perception_models.git@unpin-deps",
-    "imagebind @ git+https://github.com/facebookresearch/ImageBind.git",
+    "pytorch-lightning",
+    
+    # Facebook Research packages (order matters)
+    "pytorchvideo @ git+https://github.com/facebookresearch/pytorchvideo.git@6cdc929315aab1b5674b6dcf73b16ec99147735f",
     "dacvae @ git+https://github.com/facebookresearch/dacvae.git",
+    "imagebind @ git+https://github.com/facebookresearch/ImageBind.git",
+    "perception-models @ git+https://github.com/facebookresearch/perception_models.git@unpin-deps",
+    "sam-audio @ git+https://github.com/facebookresearch/sam-audio.git",
 ]
 
