@@ -17,7 +17,7 @@ dependencies = [
     "torchdiffeq",
     "descript-audiotools",
     
-    # ImageBind dependencies (must be before ImageBind)
+    # ImageBind dependencies
     "iopath",
     "ftfy",
     "regex",
@@ -29,11 +29,7 @@ dependencies = [
     "eva-decord",
     "pytorch-lightning",
     
-    # Facebook Research packages (order matters)
-    "pytorchvideo @ git+https://github.com/facebookresearch/pytorchvideo.git@6cdc929315aab1b5674b6dcf73b16ec99147735f",
-    "dacvae @ git+https://github.com/facebookresearch/dacvae.git",
-    "imagebind @ git+https://github.com/facebookresearch/ImageBind.git",
-    "perception-models @ git+https://github.com/facebookresearch/perception_models.git@unpin-deps",
-    "sam-audio @ git+https://github.com/facebookresearch/sam-audio.git",
+    # Note: Facebook Research git packages are installed separately 
+    # in Dockerfile with --no-deps to avoid dependency conflicts
 ]
 
