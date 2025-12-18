@@ -109,6 +109,7 @@ def load_model(model_size: str = "large"):
     # Check for cached model first
     snapshot_path = resolve_snapshot_path(model_id)
     
+    print(f"Snapshot path: {snapshot_path}")
     if snapshot_path:
         # Load from cached snapshot (offline)
         print(f"Loading SAM Audio model from cache (size: {model_size}) on device: {DEVICE}")
