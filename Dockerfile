@@ -16,6 +16,13 @@ RUN apt-get update && apt-get install -y \
 # Install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip
 
+# Upgrade PyTorch to 2.5+ (required for torch.nn.attention.flex_attention)
+RUN pip install --no-cache-dir \
+    torch==2.5.1 \
+    torchvision==0.20.1 \
+    torchaudio==2.5.1 \
+    --index-url https://download.pytorch.org/whl/cu124
+
 # Copy pyproject.toml and install base dependencies
 COPY pyproject.toml /app/
 RUN pip install --no-cache-dir .
@@ -35,8 +42,9 @@ RUN pip install --no-cache-dir --no-deps \
     git+https://github.com/facebookresearch/perception_models.git@unpin-deps \
     git+https://github.com/facebookresearch/sam-audio.git
 
-# Verify ImageBind can be imported
+# Verify imports work
 RUN python -c "from imagebind import data; print('ImageBind import OK')"
+RUN python -c "from sam_audio import SAMAudio, SAMAudioProcessor; print('SAM Audio import OK')"
 
 # Copy handler code
 COPY handler.py /app/handler.py
