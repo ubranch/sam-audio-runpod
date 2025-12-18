@@ -20,10 +20,9 @@ RUN curl -fsSL https://repo.jellyfin.org/ubuntu/jellyfin_team.gpg.key | gpg --de
     apt-get install -y jellyfin-ffmpeg7 && \
     ln -s /usr/lib/jellyfin-ffmpeg/ffmpeg /usr/local/bin/ffmpeg && \
     ln -s /usr/lib/jellyfin-ffmpeg/ffprobe /usr/local/bin/ffprobe && \
+    echo "/usr/lib/jellyfin-ffmpeg/lib" > /etc/ld.so.conf.d/jellyfin-ffmpeg.conf && \
+    ldconfig && \
     rm -rf /var/lib/apt/lists/*
-
-# Set library path for FFmpeg 7 shared libraries
-ENV LD_LIBRARY_PATH="/usr/lib/jellyfin-ffmpeg/lib:${LD_LIBRARY_PATH}"
 
 # Install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip
@@ -54,16 +53,13 @@ RUN pip install --no-cache-dir --no-deps \
     git+https://github.com/facebookresearch/perception_models.git@unpin-deps \
     git+https://github.com/facebookresearch/sam-audio.git
 
-# Re-ensure PyTorch 2.5+ and reinstall torchcodec from PyTorch index
-# (ImageBind may have downgraded PyTorch, and torchcodec needs matching ABI)
-RUN pip install --no-cache-dir \
+# Re-ensure PyTorch 2.5+ AND torchcodec together from same index
+# (Installing together ensures matching ABI)
+RUN pip install --no-cache-dir --force-reinstall \
     torch==2.5.1 \
     torchvision==0.20.1 \
     torchaudio==2.5.1 \
-    --index-url https://download.pytorch.org/whl/cu124
-
-# Install torchcodec from PyTorch's cu124 index (matches our PyTorch ABI)
-RUN pip install --no-cache-dir --force-reinstall torchcodec \
+    torchcodec \
     --index-url https://download.pytorch.org/whl/cu124
 
 # Verify versions and imports
