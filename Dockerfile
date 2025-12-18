@@ -10,13 +10,20 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     libsndfile1 \
     git \
-    ffmpeg \
-    libavcodec-dev \
-    libavformat-dev \
-    libavutil-dev \
-    libswresample-dev \
-    libswscale-dev \
+    curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Install FFmpeg 7 from jellyfin repo (torchcodec works better with FFmpeg 5+)
+RUN curl -fsSL https://repo.jellyfin.org/ubuntu/jellyfin_team.gpg.key | gpg --dearmor -o /usr/share/keyrings/jellyfin.gpg && \
+    echo "deb [signed-by=/usr/share/keyrings/jellyfin.gpg] https://repo.jellyfin.org/ubuntu jammy main" > /etc/apt/sources.list.d/jellyfin.list && \
+    apt-get update && \
+    apt-get install -y jellyfin-ffmpeg7 && \
+    ln -s /usr/lib/jellyfin-ffmpeg/ffmpeg /usr/local/bin/ffmpeg && \
+    ln -s /usr/lib/jellyfin-ffmpeg/ffprobe /usr/local/bin/ffprobe && \
+    rm -rf /var/lib/apt/lists/*
+
+# Set library path for FFmpeg 7 shared libraries
+ENV LD_LIBRARY_PATH="/usr/lib/jellyfin-ffmpeg/lib:${LD_LIBRARY_PATH}"
 
 # Install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip
@@ -55,11 +62,18 @@ RUN pip install --no-cache-dir \
     torchaudio==2.5.1 \
     --index-url https://download.pytorch.org/whl/cu124
 
-# Reinstall torchcodec 0.2.x (required for PyTorch 2.5)
+# Reinstall torchcodec 0.2+ (for PyTorch 2.5, should find FFmpeg 7 libs)
 RUN pip install --no-cache-dir --force-reinstall "torchcodec>=0.2"
 
-# Verify PyTorch version and imports
-RUN python -c "import torch; print(f'PyTorch: {torch.__version__}'); assert torch.__version__.startswith('2.5'), f'Need PyTorch 2.5+, got {torch.__version__}'"
+# Verify versions and imports
+RUN echo "=== Version Check ===" && \
+    python -c "import torch; print(f'PyTorch: {torch.__version__}')" && \
+    python -c "import torchcodec; print(f'TorchCodec: {torchcodec.__version__}')" && \
+    ffmpeg -version | head -1 && \
+    echo "===================="
+
+RUN python -c "import torch; assert torch.__version__.startswith('2.5'), f'Need PyTorch 2.5+, got {torch.__version__}'"
+RUN python -c "import torchcodec; v = torchcodec.__version__; assert v.startswith('0.2') or v.startswith('0.3'), f'Need torchcodec 0.2+, got {v}'"
 RUN python -c "from imagebind import data; print('ImageBind import OK')"
 RUN python -c "from sam_audio import SAMAudio, SAMAudioProcessor; print('SAM Audio import OK')" || \
     python -c "import traceback; exec(\"try:\\n    from sam_audio import SAMAudio\\nexcept:\\n    traceback.print_exc()\")"
