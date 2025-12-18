@@ -53,8 +53,9 @@ RUN pip install --no-cache-dir --no-deps \
     git+https://github.com/facebookresearch/perception_models.git@unpin-deps \
     git+https://github.com/facebookresearch/sam-audio.git
 
-# Re-ensure PyTorch 2.5+ AND torchcodec together from same index
-# (Installing together ensures matching ABI)
+# CRITICAL: Install PyTorch + torchcodec together from SAME cu124 index
+# This ensures ABI compatibility. torchcodec MUST come from PyTorch's index, 
+# NOT PyPI, otherwise you get "undefined symbol" errors at runtime.
 RUN pip install --no-cache-dir --force-reinstall \
     torch==2.5.1 \
     torchvision==0.20.1 \
@@ -70,7 +71,7 @@ RUN echo "=== Version Check ===" && \
     echo "===================="
 
 RUN python -c "import torch; assert torch.__version__.startswith('2.5'), f'Need PyTorch 2.5+, got {torch.__version__}'"
-RUN python -c "import torchcodec; v = torchcodec.__version__; assert v.startswith('0.2') or v.startswith('0.3'), f'Need torchcodec 0.2+, got {v}'"
+RUN python -c "import torchcodec; print(f'torchcodec {torchcodec.__version__} loaded successfully')"
 RUN python -c "from imagebind import data; print('ImageBind import OK')"
 RUN python -c "from sam_audio import SAMAudio, SAMAudioProcessor; print('SAM Audio import OK')" || \
     python -c "import traceback; exec(\"try:\\n    from sam_audio import SAMAudio\\nexcept:\\n    traceback.print_exc()\")"

@@ -3,15 +3,14 @@ name = "sam-service"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
-    # Core (torch/torchaudio installed separately in Dockerfile for version control)
+    # Core (torch/torchaudio/torchcodec installed separately in Dockerfile for version control)
     "runpod",
     "transformers",
     "scipy",
     "soundfile",
     "requests",
     
-    # Audio processing (torchcodec 0.2.x for PyTorch 2.5)
-    "torchcodec>=0.2",
+    # Audio processing (torchcodec installed from cu124 index in Dockerfile)
     "torchdiffeq",
     "descript-audiotools",
     
