@@ -62,8 +62,9 @@ RUN pip install --no-cache-dir \
     torchaudio==2.5.1 \
     --index-url https://download.pytorch.org/whl/cu124
 
-# Reinstall torchcodec 0.2+ (for PyTorch 2.5, should find FFmpeg 7 libs)
-RUN pip install --no-cache-dir --force-reinstall "torchcodec>=0.2"
+# Install torchcodec from PyTorch's cu124 index (matches our PyTorch ABI)
+RUN pip install --no-cache-dir --force-reinstall torchcodec \
+    --index-url https://download.pytorch.org/whl/cu124
 
 # Verify versions and imports
 RUN echo "=== Version Check ===" && \
