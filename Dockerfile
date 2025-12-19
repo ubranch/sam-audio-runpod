@@ -24,6 +24,9 @@ RUN curl -fsSL https://repo.jellyfin.org/ubuntu/jellyfin_team.gpg.key | gpg --de
     ldconfig && \
     rm -rf /var/lib/apt/lists/*
 
+# Set LD_LIBRARY_PATH for jellyfin-ffmpeg libs (required for torchcodec to find libavutil etc.)
+ENV LD_LIBRARY_PATH="/usr/lib/jellyfin-ffmpeg/lib:${LD_LIBRARY_PATH}"
+
 # Install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip
 
