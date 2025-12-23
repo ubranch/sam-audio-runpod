@@ -1,0 +1,6 @@
+# RunPod client
+runpod
+requests
+
+# Local dev utilities
+python-dotenv
