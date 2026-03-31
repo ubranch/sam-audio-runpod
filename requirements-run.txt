@@ -1,6 +1,6 @@
 # RunPod client
 runpod
-requests
+boto3
 
 # Local dev utilities
 python-dotenv
