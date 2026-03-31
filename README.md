@@ -5,7 +5,8 @@ Audio source separation using Meta's [Segment Anything Audio (SAM-Audio)](https:
 ## Features
 
 - **Text-prompted separation**: Describe what you want to isolate (e.g., "Drums", "Vocals", "A man speaking")
-- **Multiple model sizes**: small, base, large
+- **Cloudflare R2 storage**: Input and output audio via R2 object keys (S3-compatible)
+- **Batch processing**: Process multiple audio items in a single request
 - **RunPod Serverless**: Deploy as a scalable serverless endpoint
 
 ## Local Development
@@ -31,6 +32,30 @@ uv pip install --no-deps git+https://github.com/facebookresearch/pytorchvideo.gi
 uv pip install iopath
 ```
 
+### Environment Variables
+
+Copy `.env.example` to `.env` and fill in your values:
+
+```bash
+cp .env.example .env
+```
+
+Required variables:
+
+| Variable | Description |
+|----------|-------------|
+| `R2_ENDPOINT_URL` | Cloudflare R2 S3-compatible endpoint (e.g., `https://<account_id>.r2.cloudflarestorage.com`) |
+| `R2_ACCESS_KEY_ID` | R2 API token access key ID |
+| `R2_SECRET_ACCESS_KEY` | R2 API token secret access key |
+| `R2_BUCKET_NAME` | R2 bucket name |
+
+Optional variables:
+
+| Variable | Description |
+|----------|-------------|
+| `HF_TOKEN` | Hugging Face token (required for gated model access) |
+| `MODEL_NAME` | Override default model (defaults to `facebook/sam-audio-large`) |
+
 ### Hugging Face Authentication
 
 The SAM Audio model requires Hugging Face authentication:
@@ -41,16 +66,6 @@ The SAM Audio model requires Hugging Face authentication:
    ```bash
    huggingface-cli login
    ```
-
-### Run Locally
-
-```bash
-# Convert audio to WAV if needed
-ffmpeg -i test.mp3 -ar 16000 test.wav
-
-# Run the test script
-python test.py
-```
 
 ## RunPod Serverless Deployment
 
@@ -73,15 +88,12 @@ docker push your-registry/sam-audio-serverless:latest
 2. Create a new endpoint
 3. Select your Docker image
 4. Configure GPU (recommended: RTX 3090 or better for `large` model)
-5. **Important:** Set environment variables:
+5. Set environment variables:
+   - `R2_ENDPOINT_URL`: Your Cloudflare R2 S3-compatible endpoint
+   - `R2_ACCESS_KEY_ID`: R2 API token access key ID
+   - `R2_SECRET_ACCESS_KEY`: R2 API token secret access key
+   - `R2_BUCKET_NAME`: R2 bucket name
    - `HF_TOKEN`: Your Hugging Face access token (required for gated model access)
-
-#### Getting Your HF_TOKEN
-
-1. Go to [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)
-2. Create a new token with "Read" access
-3. Request access to the model at [facebook/sam-audio-large](https://huggingface.co/facebook/sam-audio-large)
-4. Add the token as `HF_TOKEN` in your RunPod endpoint environment variables
 
 ### API Usage
 
@@ -90,61 +102,75 @@ docker push your-registry/sam-audio-serverless:latest
 ```json
 {
   "input": {
-    "audio_url": "https://example.com/audio.wav",
-    "description": "Drums",
-    "model_size": "large"
+    "items": [
+      {
+        "r2_key": "inputs/song1.wav",
+        "description": "Drums"
+      }
+    ],
+    "return_target": true,
+    "return_residual": false,
+    "output_format": "wav",
+    "output_prefix": "outputs/"
   }
 }
 ```
 
-Or with base64 audio:
-
-```json
-{
-  "input": {
-    "audio_base64": "base64_encoded_audio_data",
-    "description": "Vocals",
-    "model_size": "large"
-  }
-}
-```
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `items[].r2_key` | string | *required* | R2 object key for the input audio file |
+| `items[].description` | string | *required* | Text description of the sound to isolate |
+| `return_target` | bool | `true` | Return the isolated audio |
+| `return_residual` | bool | `false` | Return the background/residual audio |
+| `output_format` | string | `"wav"` | Output audio format (`wav`, `flac`) |
+| `output_prefix` | string | `"outputs/"` | R2 key prefix for output files |
+| `predict_spans` | bool | `false` | Predict time spans of the target sound |
+| `reranking_candidates` | int | `1` | Number of reranking candidates (1-16) |
 
 #### Response Format
 
 ```json
 {
-  "target_base64": "base64_encoded_isolated_audio",
-  "residual_base64": "base64_encoded_residual_audio",
-  "sample_rate": 16000,
-  "description": "Drums",
-  "status": "success"
+  "results": [
+    {
+      "target_r2_key": "outputs/<job_id>/item_0_target.wav",
+      "residual_r2_key": "outputs/<job_id>/item_0_residual.wav",
+      "duration_seconds": 5.2
+    }
+  ],
+  "sample_rate": 48000
 }
 ```
+
+Output files are uploaded to R2 at `{output_prefix}{job_id}/item_{i}_target.{format}`.
 
 ### Example Python Client
 
 ```python
 import runpod
-import base64
 
 runpod.api_key = "your_api_key"
 
-# Create endpoint instance
 endpoint = runpod.Endpoint("your_endpoint_id")
 
-# Run separation
+# Run separation — input audio must already exist in R2
 result = endpoint.run_sync({
     "input": {
-        "audio_url": "https://example.com/song.wav",
-        "description": "Drums"
+        "items": [
+            {
+                "r2_key": "inputs/song.wav",
+                "description": "Drums"
+            }
+        ],
+        "return_target": True,
+        "output_prefix": "separated/"
     }
 })
 
-# Decode and save result
-if result.get("status") == "success":
-    target_audio = base64.b64decode(result["target_base64"])
-    with open("drums_isolated.wav", "wb") as f:
-        f.write(target_audio)
+# Result contains R2 keys where output was uploaded
+for item in result["results"]:
+    print(f"Target uploaded to: {item['target_r2_key']}")
+    # Download from R2 using boto3 if needed
 ```
 
 ## Supported Descriptions
@@ -167,4 +193,3 @@ SAM-Audio can isolate various sounds:
 ## License
 
 SAM-Audio is licensed under the [SAM License](https://github.com/facebookresearch/sam-audio/blob/main/LICENSE).
-
