@@ -127,6 +127,12 @@ logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
 SAMPLE_RATE = 48000
 R2_BUCKET_NAME = os.environ.get("R2_BUCKET_NAME", "")
 
+# Validate R2 configuration at startup
+_R2_REQUIRED = ["R2_ENDPOINT_URL", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET_NAME"]
+_r2_missing = [v for v in _R2_REQUIRED if not os.environ.get(v)]
+if _r2_missing:
+    raise RuntimeError(f"Missing required R2 environment variables: {', '.join(_r2_missing)}")
+
 # Global model instances (loaded once during cold start)
 model = None
 processor = None
