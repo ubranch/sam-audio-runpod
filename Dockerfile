@@ -35,13 +35,19 @@ RUN pip install --no-cache-dir \
     git+https://github.com/facebookresearch/sam-audio.git
 
 # Install RunPod handler dependencies
-RUN pip install --no-cache-dir runpod requests
+RUN pip install --no-cache-dir runpod boto3
 
 # Copy handler code
 COPY handler.py ./
 
 # Environment
 ENV PYTHONUNBUFFERED=1
+
+# R2 credentials (set at deploy time via RunPod environment variables)
+# ENV R2_ENDPOINT_URL=https://<account_id>.r2.cloudflarestorage.com
+# ENV R2_ACCESS_KEY_ID=
+# ENV R2_SECRET_ACCESS_KEY=
+# ENV R2_BUCKET_NAME=
 
 # RunPod handler entrypoint
 CMD ["python", "handler.py"]

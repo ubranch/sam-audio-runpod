@@ -6,7 +6,6 @@ Performs GPU inference on batches of audio segments.
 Chunking and stitching are client responsibilities.
 """
 
-import base64
 import io
 import logging
 import os
@@ -109,8 +108,8 @@ else:
 # Now safe to import HuggingFace libraries
 # ---------------------------
 
+import boto3
 import runpod
-import requests
 import torch
 import torchaudio
 
@@ -126,10 +125,28 @@ logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
 
 # Constants
 SAMPLE_RATE = 48000
+R2_BUCKET_NAME = os.environ.get("R2_BUCKET_NAME", "")
 
 # Global model instances (loaded once during cold start)
 model = None
 processor = None
+
+# R2 client singleton
+_r2_client = None
+
+
+def get_r2_client():
+    """Get or create the R2 S3-compatible client."""
+    global _r2_client
+    if _r2_client is None:
+        _r2_client = boto3.client(
+            "s3",
+            endpoint_url=os.environ["R2_ENDPOINT_URL"],
+            aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
+            aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
+            region_name="auto",
+        )
+    return _r2_client
 
 
 def load_model():
@@ -160,44 +177,46 @@ def load_model():
     log.info("Model loaded successfully")
 
 
-def decode_audio(audio_url: Optional[str] = None, audio_base64: Optional[str] = None) -> torch.Tensor:
+def decode_audio(r2_key: str) -> torch.Tensor:
     """
-    Decode audio from URL or base64 string.
+    Download audio from R2 by object key.
     Returns tensor at 48kHz sample rate.
     """
-    if audio_url:
-        # Download from URL
-        response = requests.get(audio_url, timeout=60)
-        response.raise_for_status()
-        audio_bytes = response.content
-    elif audio_base64:
-        # Decode base64
-        audio_bytes = base64.b64decode(audio_base64)
-    else:
-        raise ValueError("Either audio_url or audio_base64 must be provided")
-    
+    r2 = get_r2_client()
+    response = r2.get_object(Bucket=R2_BUCKET_NAME, Key=r2_key)
+    audio_bytes = response["Body"].read()
+
     # Write to temp file and load with torchaudio
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as tmp:
         tmp.write(audio_bytes)
         tmp.flush()
         wav, sr = torchaudio.load(tmp.name)
-    
+
     # Resample to 48kHz if needed
     if sr != SAMPLE_RATE:
         wav = torchaudio.functional.resample(wav, sr, SAMPLE_RATE)
-    
+
     return wav
 
 
-def encode_audio(wav: torch.Tensor, output_format: str = "wav") -> str:
-    """Encode audio tensor to base64 string."""
+def upload_audio(wav: torch.Tensor, r2_key: str, output_format: str = "wav") -> str:
+    """Encode audio tensor and upload to R2. Returns the R2 key."""
     if wav.dim() == 1:
         wav = wav.unsqueeze(0)
-    
+
     buffer = io.BytesIO()
     torchaudio.save(buffer, wav, SAMPLE_RATE, format=output_format)
     buffer.seek(0)
-    return base64.b64encode(buffer.read()).decode("utf-8")
+
+    content_type = "audio/flac" if output_format == "flac" else "audio/wav"
+    r2 = get_r2_client()
+    r2.put_object(
+        Bucket=R2_BUCKET_NAME,
+        Key=r2_key,
+        Body=buffer.read(),
+        ContentType=content_type,
+    )
+    return r2_key
 
 
 def validate_input(job_input: dict) -> tuple[list, dict]:
@@ -211,8 +230,8 @@ def validate_input(job_input: dict) -> tuple[list, dict]:
     
     # Validate each item
     for i, item in enumerate(items):
-        if not item.get("audio_url") and not item.get("audio_base64"):
-            raise ValueError(f"Item {i}: Either 'audio_url' or 'audio_base64' is required")
+        if not item.get("r2_key"):
+            raise ValueError(f"Item {i}: 'r2_key' is required")
         if not item.get("description"):
             raise ValueError(f"Item {i}: 'description' is required")
     
@@ -230,6 +249,7 @@ def validate_input(job_input: dict) -> tuple[list, dict]:
         "return_target": return_target,
         "return_residual": return_residual,
         "output_format": job_input.get("output_format", "wav"),
+        "output_prefix": job_input.get("output_prefix", "outputs/"),
     }
     
     return items, options
@@ -254,10 +274,7 @@ def handler(job):
         descriptions = []
         
         for item in items:
-            wav = decode_audio(
-                audio_url=item.get("audio_url"),
-                audio_base64=item.get("audio_base64")
-            )
+            wav = decode_audio(r2_key=item["r2_key"])
             audios.append(wav)
             descriptions.append(item["description"])
         
@@ -276,30 +293,37 @@ def handler(job):
                 reranking_candidates=options["reranking_candidates"],
             )
         
-        # Process results
+        # Process results and upload to R2
+        job_id = job.get("id", "unknown")
+        fmt = options["output_format"]
         results = []
         for i in range(len(items)):
             target = result.target[i] if isinstance(result.target, list) else result.target
             residual = result.residual[i] if isinstance(result.residual, list) else result.residual
-            
+
             if target.dim() == 1:
                 target = target.unsqueeze(0)
             if residual.dim() == 1:
                 residual = residual.unsqueeze(0)
-            
+
             target = target.float().cpu()
             residual = residual.float().cpu()
-            
+
+            base_key = f"{options['output_prefix']}{job_id}/item_{i}"
             item_result = {
                 "duration_seconds": target.shape[-1] / SAMPLE_RATE,
             }
-            
+
             if options["return_target"]:
-                item_result["target_base64"] = encode_audio(target, options["output_format"])
-            
+                target_key = f"{base_key}_target.{fmt}"
+                upload_audio(target, target_key, fmt)
+                item_result["target_r2_key"] = target_key
+
             if options["return_residual"]:
-                item_result["residual_base64"] = encode_audio(residual, options["output_format"])
-            
+                residual_key = f"{base_key}_residual.{fmt}"
+                upload_audio(residual, residual_key, fmt)
+                item_result["residual_r2_key"] = residual_key
+
             results.append(item_result)
         
         return {
