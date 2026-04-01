@@ -34,11 +34,6 @@ RUN pip install --no-cache-dir \
     torchvision==0.20.1 \
     --index-url https://download.pytorch.org/whl/cu124
 
-# torchcodec has to come from the same pytorch cu124 index as torch itself.
-RUN pip install --no-cache-dir \
-    torchcodec==0.1 \
-    --index-url https://download.pytorch.org/whl/cu124
-
 # install the upstream runtime dependency set explicitly instead of relying on
 # sam-audio's package metadata to pull everything in transitively.
 RUN pip install --no-cache-dir \
@@ -55,21 +50,27 @@ RUN pip install --no-cache-dir \
     iopath
 
 RUN pip install --no-cache-dir --no-deps \
-    git+https://github.com/facebookresearch/perception_models.git@unpin-deps \
     git+https://github.com/facebookresearch/ImageBind.git \
     git+https://github.com/facebookresearch/dacvae.git \
-    git+https://github.com/facebookresearch/pytorchvideo.git@6cdc929315aab1b5674b6dcf73b16ec99147735f \
-    git+https://github.com/facebookresearch/sam-audio.git@68b48d48fff1ad776d3afefbe634eb5f5d60ba7b
+    git+https://github.com/facebookresearch/pytorchvideo.git@6cdc929315aab1b5674b6dcf73b16ec99147735f
 
-# the upstream package install can leave a non-importable wheel in this image,
-# so keep the pinned source tree on PYTHONPATH as the runtime import source.
+COPY patches/ /tmp/patches/
+
+# keep pinned source trees on PYTHONPATH and patch them in-place so this image
+# remains audio-only and never imports torchcodec during bootstrap.
+RUN git clone --filter=blob:none https://github.com/facebookresearch/perception_models.git /opt/perception-models && \
+    cd /opt/perception-models && \
+    git checkout unpin-deps && \
+    git apply /tmp/patches/perception-models-audio-only.patch
+
 RUN git clone --filter=blob:none https://github.com/facebookresearch/sam-audio.git /opt/sam-audio && \
     cd /opt/sam-audio && \
-    git checkout 68b48d48fff1ad776d3afefbe634eb5f5d60ba7b
-ENV PYTHONPATH="/opt/sam-audio"
+    git checkout 68b48d48fff1ad776d3afefbe634eb5f5d60ba7b && \
+    git apply /tmp/patches/sam-audio-audio-only.patch
+ENV PYTHONPATH="/opt/sam-audio:/opt/perception-models"
 
-# fail the image build if sam_audio's real runtime imports are still broken.
-RUN python -c "import importlib.util; assert importlib.util.find_spec('core.audio_visual_encoder'), 'core.audio_visual_encoder not found'; from sam_audio import SAMAudio, SAMAudioProcessor; print('sam_audio runtime imports ok')"
+# fail the image build if the patched audio-only import path is still broken.
+RUN python -c "from sam_audio import SAMAudio, SAMAudioProcessor; from core.audio_visual_encoder.transforms import AudioProcessor, PEAudioFrameTransform; print('sam_audio runtime imports ok')"
 
 # runpod handler deps
 RUN pip install --no-cache-dir runpod==1.8.2 requests==2.32.5

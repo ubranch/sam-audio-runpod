@@ -1,0 +1,85 @@
+diff --git a/core/audio_visual_encoder/transforms.py b/core/audio_visual_encoder/transforms.py
+index 734b641..fd38933 100644
+--- a/core/audio_visual_encoder/transforms.py
++++ b/core/audio_visual_encoder/transforms.py
+@@ -4,8 +4,8 @@ from transformers import BatchFeature
+ from typing import Optional
+ import logging
+ import torch
+-from torchcodec.decoders import AudioDecoder, VideoDecoder
+ from torch.nn.utils.rnn import pad_sequence
++import torchaudio
+ import torchvision.transforms as T
+ from ..vision_encoder.config import PE_VISION_CONFIG
+ from huggingface_hub import snapshot_download
+@@ -15,6 +15,17 @@ import json
+ 
+ logger = logging.getLogger(__name__)
+ 
++AUDIO_ONLY_IMAGE_ERROR = (
++    "this runpod image is audio-only and does not support upstream video decoding paths"
++)
++
++
++def _load_audio_file(path: str, sampling_rate: int) -> torch.Tensor:
++    wav, sr = torchaudio.load(path)
++    if sr != sampling_rate:
++        wav = torchaudio.functional.resample(wav, sr, sampling_rate)
++    return wav.mean(0, keepdim=True)
++
+ 
+ AudioInput = torch.Tensor | list[torch.Tensor] | str | list[str]
+ VideoInput = AudioInput
+@@ -37,8 +48,7 @@ class AudioProcessor:
+         return torch.nn.functional.pad(wav, p1d, mode="reflect")
+ 
+     def _load_audio(self, path: str):
+-        ad = AudioDecoder(path, sample_rate=self.sampling_rate, num_channels=1)
+-        return ad.get_all_samples().data
++        return _load_audio_file(path, self.sampling_rate)
+ 
+     def __call__(
+         self,
+@@ -121,11 +131,7 @@ class VideoProcessor:
+             return tensor[idxs]
+ 
+     def _load_video(self, path: str):
+-        vd = VideoDecoder(path)
+-        if self.fixed_len_video:
+-            frame_idxs = self._sample_frames(vd.metadata.num_frames_from_header)
+-            return vd.get_frames_at(frame_idxs).data
+-        return vd[:].data
++        raise RuntimeError(AUDIO_ONLY_IMAGE_ERROR)
+ 
+     def __call__(self, raw_video: VideoInput):
+         if isinstance(raw_video, str):
+@@ -147,13 +153,7 @@ class VideoProcessor:
+                 sampled.append(video[idxs])
+             raw_video = sampled
+ 
+-        transformed = [self.frame_transform(v) for v in raw_video]
+-        lengths = torch.tensor([v.size(0) for v in transformed])
+-        padding_mask = torch.arange(lengths.max())[None] < lengths[:, None]
+-        pixel_values = pad_sequence(transformed, batch_first=True)
+-        return BatchFeature(
+-            {"pixel_values_videos": pixel_values, "padding_mask_videos": padding_mask}
+-        )
++        raise RuntimeError(AUDIO_ONLY_IMAGE_ERROR)
+ 
+ 
+ class PEAudioVisualTransform:
+@@ -218,12 +218,10 @@ class PEAudioVisualTransform:
+                 batch["padding_mask"] = batch["padding_mask"][:, :: self.audio_processor.hop_length]
+ 
+         if videos is not None:
+-            batch.update(self.video_processor(videos))
++            raise RuntimeError(AUDIO_ONLY_IMAGE_ERROR)
+ 
+         if pe_features is not None:
+-            if self.video_processor.fixed_len_video:
+-                pe_features = [self.video_processor._sample_frames(tensor=v) for v in pe_features]
+-            batch["pe_features"] = pad_sequence(pe_features, batch_first=True)
++            raise RuntimeError(AUDIO_ONLY_IMAGE_ERROR)
+ 
+         return batch
+ 

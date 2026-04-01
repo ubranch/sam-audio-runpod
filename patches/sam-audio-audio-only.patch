@@ -1,0 +1,99 @@
+diff --git a/sam_audio/processor.py b/sam_audio/processor.py
+index 7935644..1c585c2 100644
+--- a/sam_audio/processor.py
++++ b/sam_audio/processor.py
+@@ -10,13 +10,23 @@ import torch
+ import torchaudio
+ from huggingface_hub import hf_hub_download
+ from torch.nn.utils.rnn import pad_sequence
+-from torchcodec.decoders import AudioDecoder, VideoDecoder
+ from transformers import AutoTokenizer, BatchFeature
+ 
+ from sam_audio.model.config import SAMAudioConfig, SAMAudioJudgeConfig
+ 
+ logger = logging.getLogger(__name__)
+ 
++AUDIO_ONLY_IMAGE_ERROR = (
++    "this runpod image is audio-only and does not support upstream video decoding paths"
++)
++
++
++def _load_audio_file(path: str, sampling_rate: int) -> torch.Tensor:
++    wav, sr = torchaudio.load(path)
++    if sr != sampling_rate:
++        wav = torchaudio.functional.resample(wav, sr, sampling_rate)
++    return wav.mean(0, keepdim=True)
++
+ Anchor = Tuple[str, float, float]
+ 
+ 
+@@ -134,25 +144,7 @@ def load_video(
+     feature_idx_to_wav_idx: Callable[[torch.Tensor], torch.Tensor],
+     audio_sampling_rate: int,
+ ) -> list[torch.Tensor]:
+-    all_frames = []
+-    for size, video in zip(sizes, videos, strict=False):
+-        audio_timestamps = (
+-            feature_idx_to_wav_idx(torch.arange(size)) / audio_sampling_rate
+-        )
+-        if isinstance(video, str):
+-            decoder = VideoDecoder(video, dimension_order="NCHW")
+-            data = decoder.get_frames_in_range(0, len(decoder))
+-            diffs = (audio_timestamps[None] - data.pts_seconds[:, None]).abs()
+-            frame_idxs = diffs.argmin(dim=0)
+-            frames = data.data[frame_idxs]
+-        else:
+-            assert video.size(1) == 3, (
+-                f"Expected video tensor to be in NCHW format, but found {video.size(1)} channels"
+-            )
+-            idx = torch.linspace(0, video.size(0) - 1, int(size)).round().long()
+-            frames = video[idx]
+-        all_frames.append(frames)
+-    return all_frames
++    raise RuntimeError(AUDIO_ONLY_IMAGE_ERROR)
+ 
+ 
+ class Processor:
+@@ -199,9 +191,7 @@ class Processor:
+         videos: List[str | torch.Tensor],
+         masks: List[str | torch.Tensor],
+     ) -> list[torch.Tensor]:
+-        video = [VideoDecoder(v)[:] if isinstance(v, str) else v for v in videos]
+-        video_mask = [VideoDecoder(v)[:] if isinstance(v, str) else v for v in masks]
+-        return [v * m.eq(0) for v, m in zip(video, video_mask, strict=False)]
++        raise RuntimeError(AUDIO_ONLY_IMAGE_ERROR)
+ 
+ 
+ class SAMAudioProcessor(Processor):
+@@ -241,11 +231,8 @@ class SAMAudioProcessor(Processor):
+ 
+         sizes = self.wav_to_feature_idx(wav_sizes)
+         audio_pad_mask = mask_from_sizes(sizes)
+-        masked_video = None
+         if masked_videos is not None:
+-            masked_video = load_video(
+-                sizes, masked_videos, self.feature_to_wav_idx, self.audio_sampling_rate
+-            )
++            raise RuntimeError(AUDIO_ONLY_IMAGE_ERROR)
+ 
+         return Batch(
+             audios=audios,
+@@ -253,7 +240,7 @@ class SAMAudioProcessor(Processor):
+             descriptions=descriptions,
+             audio_pad_mask=audio_pad_mask,
+             anchors=anchors,
+-            masked_video=masked_video,
++            masked_video=None,
+             hop_length=self.audio_hop_length,
+             audio_sampling_rate=self.audio_sampling_rate,
+             wav_sizes=wav_sizes,
+@@ -292,8 +279,7 @@ class SAMAudioJudgeProcessor(Processor):
+         return torch.nn.functional.pad(wav, p1d, mode="reflect")
+ 
+     def _load_audio(self, path: str):
+-        ad = AudioDecoder(path, sample_rate=self.audio_sampling_rate, num_channels=1)
+-        return ad.get_all_samples().data
++        return _load_audio_file(path, self.audio_sampling_rate)
+ 
+     def _process_audio(
+         self,

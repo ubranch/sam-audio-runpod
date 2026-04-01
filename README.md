@@ -199,23 +199,29 @@ uv venv --python 3.11
 source .venv/bin/activate
 
 uv pip install torch==2.5.1 torchaudio==2.5.1 torchvision==0.20.1 \
-    torchcodec==0.1 --index-url https://download.pytorch.org/whl/cu124
+    --index-url https://download.pytorch.org/whl/cu124
 
 uv pip install transformers scipy soundfile \
     torchdiffeq descript-audiotools eva-decord \
     einops timm ftfy xformers
 
-# facebook research packages (--no-deps to avoid conflicts)
-uv pip install --no-deps git+https://github.com/facebookresearch/perception_models.git@unpin-deps
+# upstream deps that are still installed as packages
 uv pip install --no-deps git+https://github.com/facebookresearch/ImageBind.git
 uv pip install --no-deps git+https://github.com/facebookresearch/dacvae.git
 uv pip install --no-deps git+https://github.com/facebookresearch/pytorchvideo.git@6cdc929315aab1b5674b6dcf73b16ec99147735f
 uv pip install iopath
 
-# sam-audio must be cloned (pip install produces a broken wheel)
-git clone https://github.com/facebookresearch/sam-audio.git /opt/sam-audio
-cd /opt/sam-audio && git checkout 68b48d48fff1ad776d3afefbe634eb5f5d60ba7b
-export PYTHONPATH="/opt/sam-audio:$PYTHONPATH"
+# this repo uses patched source trees and treats the image as audio-only.
+git clone https://github.com/facebookresearch/perception_models.git .vendor/perception-models
+git -C .vendor/perception-models checkout unpin-deps
+git -C .vendor/perception-models apply ../../patches/perception-models-audio-only.patch
+
+git clone https://github.com/facebookresearch/sam-audio.git .vendor/sam-audio
+git -C .vendor/sam-audio checkout 68b48d48fff1ad776d3afefbe634eb5f5d60ba7b
+git -C .vendor/sam-audio apply ../../patches/sam-audio-audio-only.patch
+
+export PYTHONPATH="$PWD/.vendor/sam-audio:$PWD/.vendor/perception-models:$PYTHONPATH"
+python -c "from sam_audio import SAMAudio, SAMAudioProcessor; from core.audio_visual_encoder.transforms import AudioProcessor, PEAudioFrameTransform; print('sam_audio runtime imports ok')"
 ```
 
 ### tests
