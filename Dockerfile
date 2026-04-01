@@ -29,27 +29,10 @@ RUN pip install --no-cache-dir \
     torchvision==0.20.1 \
     --index-url https://download.pytorch.org/whl/cu124
 
-# all transitive deps for sam-audio + facebook research packages
+# install sam-audio the same way as the working upstream fork and pin the
+# currently published sam-audio revision to avoid future drift.
 RUN pip install --no-cache-dir \
-    "transformers>=4.54.0" scipy soundfile torchcodec torchdiffeq \
-    einops timm ftfy xformers pydub numpy audiobox_aesthetics \
-    descript-audiotools eva-decord iopath
-
-# facebook research packages (--no-deps to prevent torch/torchcodec version conflicts)
-RUN pip install --no-cache-dir --no-deps \
-    git+https://github.com/facebookresearch/perception_models.git@unpin-deps
-RUN pip install --no-cache-dir --no-deps \
-    git+https://github.com/facebookresearch/ImageBind.git
-RUN pip install --no-cache-dir --no-deps \
-    git+https://github.com/facebookresearch/dacvae.git
-RUN pip install --no-cache-dir --no-deps \
-    git+https://github.com/facebookresearch/pytorchvideo.git@6cdc929315aab1b5674b6dcf73b16ec99147735f
-RUN pip install --no-cache-dir --no-deps \
-    git+https://github.com/lematt1991/CLAP.git
-
-# sam-audio source (pip produces broken UNKNOWN-0.0.0 wheel)
-RUN git clone --filter=blob:none https://github.com/facebookresearch/sam-audio.git /opt/sam-audio
-ENV PYTHONPATH="/opt/sam-audio"
+    git+https://github.com/facebookresearch/sam-audio.git@68b48d48fff1ad776d3afefbe634eb5f5d60ba7b
 
 # runpod handler deps
 RUN pip install --no-cache-dir runpod==1.8.2 requests==2.32.5
