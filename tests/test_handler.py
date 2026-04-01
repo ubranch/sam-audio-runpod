@@ -116,12 +116,19 @@ class TestBootstrapWorker:
         assert "model source: /runpod-volume cache" in caplog.text
         assert "worker ready" in caplog.text
 
-    def test_bootstrap_requires_token_on_cache_miss(self):
+    def test_bootstrap_allows_public_download_without_token(self, caplog):
+        caplog.set_level("INFO")
+
         with patch.dict("os.environ", {"HF_TOKEN": ""}, clear=False):
             with patch.object(handler, "LOCAL_MODEL_PATH", None):
                 with patch.object(handler, "resolve_snapshot_path", return_value=None):
-                    with pytest.raises(RuntimeError, match="HF_TOKEN is missing"):
+                    with patch.object(handler, "load_model") as load_model:
                         handler.bootstrap_worker()
+
+        load_model.assert_called_once_with(model_source=None)
+        assert "model source: huggingface download" in caplog.text
+        assert "huggingface auth: disabled, attempting anonymous download" in caplog.text
+        assert "worker ready" in caplog.text
 
 
 class TestLoadModel:

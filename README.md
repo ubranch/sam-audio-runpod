@@ -13,9 +13,10 @@ audio source separation as a runpod serverless endpoint, powered by meta's [sam-
 
 | model | env value | vram |
 |-------|-----------|------|
-| small (default) | `facebook/sam-audio-small` | ~4 gb |
-| base | `facebook/sam-audio-base` | ~8 gb |
-| large | `facebook/sam-audio-large` | ~16 gb |
+| public large (default) | `mrfakename/sam-audio-large` | ~16 gb |
+| facebook small (gated) | `facebook/sam-audio-small` | ~4 gb |
+| facebook base (gated) | `facebook/sam-audio-base` | ~8 gb |
+| facebook large (gated) | `facebook/sam-audio-large` | ~16 gb |
 
 set via the `MODEL_NAME` environment variable in your runpod template.
 
@@ -34,15 +35,17 @@ docker push your-registry/sam-audio-serverless:latest
 1. go to [runpod serverless](https://www.runpod.io/console/serverless)
 2. create a new endpoint with your docker image
 3. set environment variables:
-   - `HF_TOKEN` — huggingface access token (required, model is gated)
-   - `MODEL_NAME` — keep `facebook/sam-audio-small` for the first stable rollout
+   - `MODEL_NAME` — set `mrfakename/sam-audio-large`
+   - `HF_TOKEN` — optional for the public mirror above, required only if you switch back to a gated/private huggingface repo
 4. configure the endpoint for warm-worker startup:
    - set `workersMin` to `1`
    - enable flashboot
    - attach a network volume so `/runpod-volume` persists the huggingface cache
    - keep the first rollout in a single datacenter, or attach a matching network volume in every datacenter you enable
 
-the model requires huggingface access — request it at the [sam-audio-small](https://huggingface.co/facebook/sam-audio-small) repo page first.
+the default rollout now uses the public [mrfakename/sam-audio-large](https://huggingface.co/mrfakename/sam-audio-large) mirror so first-time downloads can work without huggingface gating.
+
+if you override `MODEL_NAME` to a `facebook/sam-audio-*` repo, that repo is gated and you must provide `HF_TOKEN`.
 
 the runpod console default payload is not valid for this handler. a test payload must use `input.items[]`, not `"prompt": "hello world"`.
 

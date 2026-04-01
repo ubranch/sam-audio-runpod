@@ -26,7 +26,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 HF_CACHE_ROOT = "/runpod-volume/huggingface-cache/hub"
-MODEL_ID = os.environ.get("MODEL_NAME", "facebook/sam-audio-small")
+MODEL_ID = os.environ.get("MODEL_NAME", "mrfakename/sam-audio-large")
 _MODEL_SOURCE_UNSET = object()
 
 
@@ -104,7 +104,7 @@ processor = None
 
 
 def prepare_model_access() -> Optional[str]:
-    """resolve startup model access and fail fast when the worker cannot boot."""
+    """resolve startup model access and prepare cache/offline flags."""
     global LOCAL_MODEL_PATH
 
     LOCAL_MODEL_PATH = resolve_snapshot_path(MODEL_ID)
@@ -123,12 +123,10 @@ def prepare_model_access() -> Optional[str]:
     os.environ.pop("TRANSFORMERS_OFFLINE", None)
     log.info("model source: huggingface download")
     log.info("cache reuse: first-time download required")
-
-    if not hf_token:
-        raise RuntimeError(
-            f"startup blocked: cache miss for {MODEL_ID} and HF_TOKEN is missing. "
-            "attach a /runpod-volume network volume with a cached model or set HF_TOKEN."
-        )
+    if hf_token:
+        log.info("huggingface auth: enabled")
+    else:
+        log.info("huggingface auth: disabled, attempting anonymous download")
 
     return None
 
