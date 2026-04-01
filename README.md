@@ -1,65 +1,27 @@
-# SAM Audio Service
+# sam-audio runpod
 
-Audio source separation using Meta's [Segment Anything Audio (SAM-Audio)](https://github.com/facebookresearch/sam-audio) model. Isolate any sound from audio using text descriptions.
+audio source separation as a runpod serverless endpoint, powered by meta's [sam-audio](https://github.com/facebookresearch/sam-audio). isolate any sound from audio using text descriptions.
 
-## Features
+## what it does
 
-- **Text-prompted separation**: Describe what you want to isolate (e.g., "Drums", "Vocals", "A man speaking")
-- **Batch processing**: Process multiple audio items in a single request (up to 16)
-- **Multiple output formats**: WAV, FLAC, OGG, MP3
-- **RunPod Serverless**: Deploy as a scalable serverless endpoint
-- **Production hardened**: Input validation, SSRF protection, size limits, sanitized errors
+- text-prompted audio separation — describe a sound, get it isolated
+- batch processing — up to 16 audio items per request
+- multiple output formats — wav, flac, ogg, mp3
+- production-ready — input validation, ssrf protection, size limits
 
-## Local Development
+## model variants
 
-### Setup
+| model | env value | vram |
+|-------|-----------|------|
+| small (default) | `facebook/sam-audio-small` | ~4 gb |
+| base | `facebook/sam-audio-base` | ~8 gb |
+| large | `facebook/sam-audio-large` | ~16 gb |
 
-```bash
-# Create virtual environment with Python 3.11+
-uv venv --python 3.11
-source .venv/bin/activate
+set via the `MODEL_NAME` environment variable in your runpod template.
 
-# Install dependencies
-uv pip install torch torchaudio transformers scipy soundfile torchcodec torchdiffeq descript-audiotools eva-decord
+## deployment
 
-# Install Facebook Research packages
-uv pip install --no-deps git+https://github.com/facebookresearch/sam-audio.git
-uv pip install --no-deps git+https://github.com/facebookresearch/perception_models.git@unpin-deps
-uv pip install --no-deps git+https://github.com/facebookresearch/ImageBind.git
-uv pip install --no-deps git+https://github.com/facebookresearch/dacvae.git
-uv pip install --no-deps git+https://github.com/facebookresearch/pytorchvideo.git@6cdc929315aab1b5674b6dcf73b16ec99147735f
-uv pip install iopath
-```
-
-### Hugging Face Authentication
-
-The SAM Audio model requires Hugging Face authentication:
-
-1. Create an account at [huggingface.co](https://huggingface.co)
-2. Request access to [facebook/sam-audio-large](https://huggingface.co/facebook/sam-audio-large)
-3. Login via CLI:
-   ```bash
-   huggingface-cli login
-   ```
-
-### Running Tests
-
-```bash
-pip install -r requirements-dev.txt
-pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-pip install runpod requests
-pytest tests/ -v
-```
-
-### Linting
-
-```bash
-ruff check handler.py tests/
-```
-
-## RunPod Serverless Deployment
-
-### Build Docker Image
+### build and push
 
 ```bash
 docker build -t sam-audio-serverless .
@@ -67,21 +29,19 @@ docker tag sam-audio-serverless your-registry/sam-audio-serverless:latest
 docker push your-registry/sam-audio-serverless:latest
 ```
 
-### Deploy to RunPod
+### runpod setup
 
-1. Go to [RunPod Serverless](https://www.runpod.io/console/serverless)
-2. Create a new endpoint
-3. Select your Docker image
-4. Configure GPU (recommended: RTX 3090 or better for `large` model)
-5. Set environment variables:
-   - `HF_TOKEN`: Your Hugging Face access token (required for gated model access)
-   - `MODEL_NAME` (optional): Override model ID (default: `facebook/sam-audio-large`)
+1. go to [runpod serverless](https://www.runpod.io/console/serverless)
+2. create a new endpoint with your docker image
+3. set environment variables:
+   - `HF_TOKEN` — huggingface access token (required, model is gated)
+   - `MODEL_NAME` — override model variant (optional, defaults to `facebook/sam-audio-small`)
 
-## API Usage
+the model requires huggingface access — request it at the [sam-audio-small](https://huggingface.co/facebook/sam-audio-small) repo page first.
 
-### Request Format
+## api
 
-The API accepts batch requests with one or more items:
+### request
 
 ```json
 {
@@ -89,11 +49,7 @@ The API accepts batch requests with one or more items:
     "items": [
       {
         "audio_url": "https://example.com/audio.wav",
-        "description": "Drums"
-      },
-      {
-        "audio_base64": "<base64-encoded-audio>",
-        "description": "Vocals"
+        "description": "drums"
       }
     ],
     "return_target": true,
@@ -105,53 +61,36 @@ The API accepts batch requests with one or more items:
 }
 ```
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `items` | array | *required* | Array of items to process (max 16) |
-| `items[].audio_url` | string | - | URL to audio file (must be http/https) |
-| `items[].audio_base64` | string | - | Base64-encoded audio data |
-| `items[].description` | string | *required* | Text description of the sound to isolate |
-| `return_target` | bool | `true` | Return the isolated audio |
-| `return_residual` | bool | `false` | Return the residual (everything except the target) |
-| `output_format` | string | `"wav"` | Output format: `wav`, `flac`, `ogg`, or `mp3` |
-| `predict_spans` | bool | `false` | Predict time spans of the target sound |
-| `reranking_candidates` | int | `1` | Number of reranking candidates (1-16) |
+| field | type | default | description |
+|-------|------|---------|-------------|
+| `items` | array | required | audio items to process (max 16) |
+| `items[].audio_url` | string | — | url to audio file |
+| `items[].audio_base64` | string | — | base64-encoded audio |
+| `items[].description` | string | required | sound to isolate |
+| `return_target` | bool | `true` | return isolated audio |
+| `return_residual` | bool | `false` | return everything except target |
+| `output_format` | string | `"wav"` | wav, flac, ogg, or mp3 |
+| `predict_spans` | bool | `false` | auto-detect time spans |
+| `reranking_candidates` | int | `1` | reranking candidates (1–16) |
 
-Each item must provide either `audio_url` or `audio_base64`, plus a `description`.
+each item needs either `audio_url` or `audio_base64`, plus a `description`.
 
-### Response Format
+### response
 
 ```json
 {
   "results": [
     {
       "duration_seconds": 10.5,
-      "target_base64": "<base64-encoded-isolated-audio>",
-      "residual_base64": "<base64-encoded-residual-audio>"
+      "target_base64": "<base64>",
+      "residual_base64": "<base64>"
     }
   ],
   "sample_rate": 48000
 }
 ```
 
-Error responses:
-
-```json
-{
-  "error": "Description of what went wrong"
-}
-```
-
-### Limits
-
-| Limit | Value |
-|-------|-------|
-| Max batch size | 16 items |
-| Max audio file size | 100 MB |
-| Sample rate | 48 kHz (auto-resampled) |
-| Supported input formats | WAV, MP3, FLAC, OGG, and anything ffmpeg supports |
-
-### Example Python Client
+### example client
 
 ```python
 import runpod
@@ -165,7 +104,7 @@ result = endpoint.run_sync({
         "items": [
             {
                 "audio_url": "https://example.com/song.wav",
-                "description": "Drums"
+                "description": "drums"
             }
         ],
         "return_target": True,
@@ -174,30 +113,52 @@ result = endpoint.run_sync({
 })
 
 if "results" in result:
-    target_audio = base64.b64decode(result["results"][0]["target_base64"])
-    with open("drums_isolated.wav", "wb") as f:
-        f.write(target_audio)
+    audio = base64.b64decode(result["results"][0]["target_base64"])
+    with open("drums.wav", "wb") as f:
+        f.write(audio)
 ```
 
-## Supported Descriptions
+### limits
 
-SAM-Audio can isolate various sounds:
+| limit | value |
+|-------|-------|
+| batch size | 16 items |
+| audio file size | 100 mb |
+| sample rate | 48 khz (auto-resampled) |
+| input formats | anything ffmpeg supports |
 
-- **Instruments**: "Drums", "Guitar", "Piano", "Bass", "Violin"
-- **Vocals**: "Vocals", "A man speaking", "A woman singing"
-- **Effects**: "Applause", "Crowd noise", "Wind"
-- **General**: Any natural language description of the sound
+## local development
 
-## Model Sizes
+```bash
+uv venv --python 3.11
+source .venv/bin/activate
 
-| Model | VRAM | Speed | Quality |
-|-------|------|-------|---------|
-| small | ~4GB | Fast | Good |
-| base | ~8GB | Medium | Better |
-| large | ~16GB | Slower | Best |
+uv pip install torch torchaudio transformers scipy soundfile \
+    torchcodec torchdiffeq descript-audiotools eva-decord \
+    einops timm ftfy xformers
 
-Set via the `MODEL_NAME` environment variable (e.g., `facebook/sam-audio-small`).
+# facebook research packages (--no-deps to avoid conflicts)
+uv pip install --no-deps git+https://github.com/facebookresearch/perception_models.git@unpin-deps
+uv pip install --no-deps git+https://github.com/facebookresearch/ImageBind.git
+uv pip install --no-deps git+https://github.com/facebookresearch/dacvae.git
+uv pip install --no-deps git+https://github.com/facebookresearch/pytorchvideo.git@6cdc929315aab1b5674b6dcf73b16ec99147735f
+uv pip install iopath
 
-## License
+# sam-audio must be cloned (pip install produces a broken wheel)
+git clone https://github.com/facebookresearch/sam-audio.git /opt/sam-audio
+cd /opt/sam-audio && git checkout 68b48d48fff1ad776d3afefbe634eb5f5d60ba7b
+export PYTHONPATH="/opt/sam-audio:$PYTHONPATH"
+```
 
-SAM-Audio is licensed under the [SAM License](https://github.com/facebookresearch/sam-audio/blob/main/LICENSE).
+### tests
+
+```bash
+pip install -r requirements-dev.txt
+pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+pip install runpod requests
+pytest tests/ -v
+```
+
+## license
+
+sam-audio is licensed under the [sam license](https://github.com/facebookresearch/sam-audio/blob/main/LICENSE).

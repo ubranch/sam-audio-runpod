@@ -1,10 +1,9 @@
-# SAM-Audio RunPod Serverless Dockerfile
+# sam-audio runpod serverless
 FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
 
-# Prevent interactive prompts during apt install
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install system dependencies
+# system deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     python3.11 \
@@ -15,50 +14,54 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Make python3.11 the default python
+# python 3.11 as default
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 && \
     update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 && \
     update-alternatives --install /usr/bin/pip pip /usr/bin/pip3 1
 
 WORKDIR /app
 
-# Install PyTorch with CUDA 12.4
+# pytorch + xformers (cuda 12.4)
 RUN pip install --no-cache-dir \
     torch==2.5.1 \
     torchaudio==2.5.1 \
     torchvision==0.20.1 \
+    xformers \
     --index-url https://download.pytorch.org/whl/cu124
 
-# Install base dependencies for sam-audio
+# sam-audio runtime deps (installed before facebook packages to satisfy transitive imports)
 RUN pip install --no-cache-dir \
-    transformers scipy soundfile torchcodec torchdiffeq descript-audiotools eva-decord
+    transformers scipy soundfile torchcodec torchdiffeq descript-audiotools eva-decord \
+    einops timm ftfy
 
-# Install Facebook Research packages (--no-deps to avoid dependency conflicts)
-RUN pip install --no-cache-dir --no-deps git+https://github.com/facebookresearch/sam-audio.git@68b48d48fff1ad776d3afefbe634eb5f5d60ba7b && \
-    pip install --no-cache-dir --no-deps git+https://github.com/facebookresearch/perception_models.git@unpin-deps && \
-    pip install --no-cache-dir --no-deps git+https://github.com/facebookresearch/ImageBind.git && \
-    pip install --no-cache-dir --no-deps git+https://github.com/facebookresearch/dacvae.git && \
-    pip install --no-cache-dir --no-deps git+https://github.com/facebookresearch/pytorchvideo.git@6cdc929315aab1b5674b6dcf73b16ec99147735f
-
-# Install iopath (required by pytorchvideo)
+# facebook research packages (--no-deps prevents pip from pulling conflicting versions)
+RUN pip install --no-cache-dir --no-deps \
+    git+https://github.com/facebookresearch/perception_models.git@unpin-deps
+RUN pip install --no-cache-dir --no-deps \
+    git+https://github.com/facebookresearch/ImageBind.git
+RUN pip install --no-cache-dir --no-deps \
+    git+https://github.com/facebookresearch/dacvae.git
+RUN pip install --no-cache-dir --no-deps \
+    git+https://github.com/facebookresearch/pytorchvideo.git@6cdc929315aab1b5674b6dcf73b16ec99147735f
 RUN pip install --no-cache-dir iopath
 
-# Install RunPod handler dependencies (pinned)
+# sam-audio: cloned from source because pip produces a broken empty wheel (UNKNOWN-0.0.0)
+RUN git clone --filter=blob:none https://github.com/facebookresearch/sam-audio.git /opt/sam-audio && \
+    cd /opt/sam-audio && \
+    git checkout 68b48d48fff1ad776d3afefbe634eb5f5d60ba7b
+ENV PYTHONPATH="/opt/sam-audio"
+
+# verify sam_audio is discoverable (full import requires cuda libs only present at runtime)
+RUN python -c "import importlib.util; spec = importlib.util.find_spec('sam_audio'); assert spec, 'sam_audio not found'; print('sam_audio OK:', spec.origin)"
+
+# runpod handler deps
 RUN pip install --no-cache-dir runpod==1.8.2 requests==2.32.5
 
-# Copy handler code
 COPY handler.py ./
 
-# Create non-root user for runtime
 RUN useradd --create-home --shell /bin/bash appuser
 USER appuser
 
-# Environment
 ENV PYTHONUNBUFFERED=1
 
-# Health check for local Docker testing (RunPod manages health externally)
-HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD python -c "import handler" || exit 1
-
-# RunPod handler entrypoint
 CMD ["python", "handler.py"]

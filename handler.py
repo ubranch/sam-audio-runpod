@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """
-SAM-Audio RunPod Serverless Handler
-
-Performs GPU inference on batches of audio segments.
-Chunking and stitching are client responsibilities.
+sam-audio runpod serverless handler.
+batch gpu inference for audio source separation.
 """
 
 import base64
@@ -16,12 +14,10 @@ import warnings
 from typing import Optional
 from urllib.parse import urlparse
 
-# Suppress noisy warnings before importing libraries
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-# Configure logging early so all modules can use it
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
@@ -29,24 +25,12 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# ---------------------------
-# Model Store Configuration (MUST be before HuggingFace imports)
-# ---------------------------
-
-# RunPod Model Store cache location
 HF_CACHE_ROOT = "/runpod-volume/huggingface-cache/hub"
-
-# Default model ID (can be overridden by MODEL_NAME env var)
-MODEL_ID = os.environ.get("MODEL_NAME", "facebook/sam-audio-large")
+MODEL_ID = os.environ.get("MODEL_NAME", "facebook/sam-audio-small")
 
 
 def resolve_snapshot_path(model_id: str) -> Optional[str]:
-    """
-    Convert a HF model id like 'facebook/sam-audio-large'
-    into its local snapshot path inside Model Store cache.
-    
-    Returns None if not found (will fall back to downloading).
-    """
+    """resolve a huggingface model id to its local cache snapshot path, or None."""
     if "/" not in model_id:
         log.warning("MODEL_ID '%s' is not in 'org/name' format", model_id)
         return None
@@ -58,64 +42,56 @@ def resolve_snapshot_path(model_id: str) -> Optional[str]:
     log.info("Model root: %s", model_root)
     
     if not os.path.isdir(model_root):
-        log.info("Cache directory not found: %s", model_root)
+        log.info("no cache at %s", model_root)
         if os.path.isdir(HF_CACHE_ROOT):
             try:
                 existing = sorted(os.listdir(HF_CACHE_ROOT))[:10]
-                log.info("Available in cache: %s", existing)
+                log.info("cache contents: %s", existing)
             except OSError:
                 pass
         return None
-    
+
     refs_main = os.path.join(model_root, "refs", "main")
     snapshots_dir = os.path.join(model_root, "snapshots")
-    
-    # 1) Preferred: use refs/main to get active snapshot hash
+
     if os.path.isfile(refs_main):
         with open(refs_main, "r") as f:
             snapshot_hash = f.read().strip()
         candidate = os.path.join(snapshots_dir, snapshot_hash)
         if os.path.isdir(candidate):
-            log.info("Using snapshot from refs/main: %s", candidate)
+            log.info("using cached snapshot: %s", candidate)
             return candidate
         else:
-            log.warning("Snapshot from refs/main not found: %s", candidate)
-    
-    # 2) Fallback: list snapshots directory and pick first one
+            log.warning("snapshot hash not found: %s", candidate)
+
     if not os.path.isdir(snapshots_dir):
-        log.warning("Snapshots directory not found: %s", snapshots_dir)
+        log.warning("no snapshots dir: %s", snapshots_dir)
         return None
-    
+
     versions = [d for d in os.listdir(snapshots_dir)
                 if os.path.isdir(os.path.join(snapshots_dir, d))]
-    
+
     if not versions:
-        log.warning("No snapshot subdirectories found under %s", snapshots_dir)
+        log.warning("no snapshots found in %s", snapshots_dir)
         return None
-    
+
     versions.sort()
     chosen = os.path.join(snapshots_dir, versions[0])
-    log.info("Using first available snapshot: %s", chosen)
+    log.info("using snapshot: %s", chosen)
     return chosen
 
 
-# Resolve model path BEFORE importing HuggingFace libraries
 LOCAL_MODEL_PATH = resolve_snapshot_path(MODEL_ID)
 
 if LOCAL_MODEL_PATH:
-    # Force offline mode - MUST be set before importing transformers/huggingface_hub
-    log.info("Cache found, enabling offline mode")
+    log.info("cache hit, offline mode")
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
 else:
-    log.info("No cache found, will download from HuggingFace")
+    log.info("no cache, will download from huggingface")
     hf_token = os.environ.get("HF_TOKEN")
     if hf_token:
-        log.info("HF_TOKEN found, will authenticate")
-
-# ---------------------------
-# Now safe to import HuggingFace libraries
-# ---------------------------
+        log.info("HF_TOKEN set")
 
 import runpod  # noqa: E402
 import requests  # noqa: E402
@@ -125,47 +101,43 @@ import torchaudio  # noqa: E402
 logging.getLogger("transformers").setLevel(logging.ERROR)
 logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
 
-# Constants
 SAMPLE_RATE = 48_000
-MAX_AUDIO_BYTES = 100 * 1024 * 1024  # 100 MB per audio item
+MAX_AUDIO_BYTES = 100 * 1024 * 1024
 MAX_BATCH_SIZE = 16
 ALLOWED_OUTPUT_FORMATS = {"wav", "flac", "ogg", "mp3"}
 
-# Global model instances (loaded once during cold start)
 model = None
 processor = None
 
 
 def load_model():
-    """Load the SAMAudio model and processor."""
+    """load sam-audio model and processor onto gpu."""
     global model, processor
-    
+
     if model is not None:
         return
-    
+
     from sam_audio import SAMAudio, SAMAudioProcessor
-    
+
     if LOCAL_MODEL_PATH:
-        # Load from cached snapshot (offline)
-        log.info(f"Loading model from Model Store cache: {LOCAL_MODEL_PATH}")
+        log.info("loading model from cache: %s", LOCAL_MODEL_PATH)
         model = SAMAudio.from_pretrained(LOCAL_MODEL_PATH)
         processor = SAMAudioProcessor.from_pretrained(LOCAL_MODEL_PATH)
     else:
-        # Download from HuggingFace
-        log.info(f"Loading model from HuggingFace: {MODEL_ID}")
+        log.info("downloading model: %s", MODEL_ID)
         hf_token = os.environ.get("HF_TOKEN")
         if hf_token:
             from huggingface_hub import login
             login(token=hf_token)
         model = SAMAudio.from_pretrained(MODEL_ID)
         processor = SAMAudioProcessor.from_pretrained(MODEL_ID)
-    
+
     model = model.eval().half().cuda()
-    log.info("Model loaded successfully")
+    log.info("model ready")
 
 
 def _validate_audio_url(url: str) -> None:
-    """Reject non-HTTP schemes and private/loopback IPs (SSRF mitigation)."""
+    """reject non-http schemes and private/loopback ips."""
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
         raise ValueError(f"Unsupported URL scheme: {parsed.scheme!r}")
@@ -183,10 +155,7 @@ def _validate_audio_url(url: str) -> None:
 
 
 def decode_audio(audio_url: Optional[str] = None, audio_base64: Optional[str] = None) -> torch.Tensor:
-    """
-    Decode audio from URL or base64 string.
-    Returns tensor at 48kHz sample rate.
-    """
+    """decode audio from url or base64 to a 48khz tensor."""
     if audio_url:
         _validate_audio_url(audio_url)
         response = requests.get(audio_url, timeout=60, stream=True)
@@ -221,7 +190,7 @@ def decode_audio(audio_url: Optional[str] = None, audio_base64: Optional[str] = 
 
 
 def encode_audio(wav: torch.Tensor, output_format: str = "wav") -> str:
-    """Encode audio tensor to base64 string."""
+    """encode audio tensor to base64."""
     if wav.dim() == 1:
         wav = wav.unsqueeze(0)
     
@@ -232,9 +201,7 @@ def encode_audio(wav: torch.Tensor, output_format: str = "wav") -> str:
 
 
 def validate_input(job_input: dict) -> tuple[list, dict]:
-    """
-    Validate and parse input, returning items list and global options.
-    """
+    """validate request payload, return (items, options)."""
     items = job_input.get("items", [])
 
     if not items:
@@ -276,9 +243,7 @@ def validate_input(job_input: dict) -> tuple[list, dict]:
 
 
 def handler(job):
-    """
-    RunPod serverless handler for SAM-Audio batch inference.
-    """
+    """runpod handler — batch audio separation."""
     job_id = job.get("id", "unknown")
     try:
         job_input = job.get("input", {})
@@ -286,7 +251,7 @@ def handler(job):
 
         load_model()
 
-        log.info("[%s] Processing batch of %d items", job_id, len(items))
+        log.info("[%s] separating %d items", job_id, len(items))
         audios = []
         descriptions = []
         
@@ -298,7 +263,6 @@ def handler(job):
             audios.append(wav)
             descriptions.append(item["description"])
         
-        # Create batch and run inference
         batch = processor(
             audios=audios,
             descriptions=descriptions,
@@ -313,7 +277,6 @@ def handler(job):
                 reranking_candidates=options["reranking_candidates"],
             )
         
-        # Process results
         results = []
         for i in range(len(items)):
             target = result.target[i] if isinstance(result.target, list) else result.target
@@ -345,19 +308,15 @@ def handler(job):
         }
     
     except ValueError as e:
-        log.warning("[%s] Validation error: %s", job_id, e)
+        log.warning("[%s] validation: %s", job_id, e)
         return {"error": str(e)}
     except Exception:
-        log.exception("[%s] Handler error", job_id)
+        log.exception("[%s] handler error", job_id)
         return {"error": "Internal processing error"}
 
 
-# ---------------------------
-# Startup
-# ---------------------------
-
-log.info("Initializing SAM-Audio handler...")
+log.info("starting sam-audio handler...")
 load_model()
-log.info("Model loaded, starting RunPod serverless...")
+log.info("ready")
 
 runpod.serverless.start({"handler": handler})
