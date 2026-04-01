@@ -1,5 +1,5 @@
 # sam-audio runpod serverless
-FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -22,7 +22,7 @@ RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 &
 
 WORKDIR /app
 
-# pytorch (cuda 12.4 wheels, forward-compatible with 12.8 runtime)
+# pytorch (cuda 12.4 wheels matching the container runtime)
 RUN pip install --no-cache-dir \
     torch==2.5.1 \
     torchaudio==2.5.1 \
