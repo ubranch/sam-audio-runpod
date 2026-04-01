@@ -34,13 +34,17 @@ RUN pip install --no-cache-dir \
     torchvision==0.20.1 \
     --index-url https://download.pytorch.org/whl/cu124
 
+# torchcodec has to come from the same pytorch cu124 index as torch itself.
+RUN pip install --no-cache-dir \
+    torchcodec==0.1 \
+    --index-url https://download.pytorch.org/whl/cu124
+
 # install the upstream runtime dependency set explicitly instead of relying on
 # sam-audio's package metadata to pull everything in transitively.
 RUN pip install --no-cache-dir \
     transformers>=4.54.0 \
     scipy \
     soundfile \
-    torchcodec \
     torchdiffeq \
     descript-audiotools \
     eva-decord \

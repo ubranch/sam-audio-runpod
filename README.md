@@ -198,8 +198,11 @@ if "results" in result:
 uv venv --python 3.11
 source .venv/bin/activate
 
-uv pip install torch torchaudio transformers scipy soundfile \
-    torchcodec torchdiffeq descript-audiotools eva-decord \
+uv pip install torch==2.5.1 torchaudio==2.5.1 torchvision==0.20.1 \
+    torchcodec==0.1 --index-url https://download.pytorch.org/whl/cu124
+
+uv pip install transformers scipy soundfile \
+    torchdiffeq descript-audiotools eva-decord \
     einops timm ftfy xformers
 
 # facebook research packages (--no-deps to avoid conflicts)
