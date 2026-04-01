@@ -1,18 +1,17 @@
 # SAM-Audio RunPod Serverless Dockerfile
-FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
 
 # Prevent interactive prompts during apt install
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     python3.11 \
     python3.11-venv \
     python3.11-dev \
     python3-pip \
     git \
-    curl \
     libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -23,7 +22,7 @@ RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 &
 
 WORKDIR /app
 
-# Install PyTorch with CUDA 12.8 first
+# Install PyTorch with CUDA 12.4
 RUN pip install --no-cache-dir \
     torch==2.5.1 \
     torchaudio==2.5.1 \
@@ -35,7 +34,7 @@ RUN pip install --no-cache-dir \
     transformers scipy soundfile torchcodec torchdiffeq descript-audiotools eva-decord
 
 # Install Facebook Research packages (--no-deps to avoid dependency conflicts)
-RUN pip install --no-cache-dir --no-deps git+https://github.com/facebookresearch/sam-audio.git && \
+RUN pip install --no-cache-dir --no-deps git+https://github.com/facebookresearch/sam-audio.git@68b48d48fff1ad776d3afefbe634eb5f5d60ba7b && \
     pip install --no-cache-dir --no-deps git+https://github.com/facebookresearch/perception_models.git@unpin-deps && \
     pip install --no-cache-dir --no-deps git+https://github.com/facebookresearch/ImageBind.git && \
     pip install --no-cache-dir --no-deps git+https://github.com/facebookresearch/dacvae.git && \
@@ -44,14 +43,22 @@ RUN pip install --no-cache-dir --no-deps git+https://github.com/facebookresearch
 # Install iopath (required by pytorchvideo)
 RUN pip install --no-cache-dir iopath
 
-# Install RunPod handler dependencies
-RUN pip install --no-cache-dir runpod requests
+# Install RunPod handler dependencies (pinned)
+RUN pip install --no-cache-dir runpod==1.8.2 requests==2.32.5
 
 # Copy handler code
 COPY handler.py ./
 
+# Create non-root user for runtime
+RUN useradd --create-home --shell /bin/bash appuser
+USER appuser
+
 # Environment
 ENV PYTHONUNBUFFERED=1
+
+# Health check for local Docker testing (RunPod manages health externally)
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD python -c "import handler" || exit 1
 
 # RunPod handler entrypoint
 CMD ["python", "handler.py"]

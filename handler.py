@@ -8,16 +8,26 @@ Chunking and stitching are client responsibilities.
 
 import base64
 import io
+import ipaddress
 import logging
 import os
 import tempfile
 import warnings
 from typing import Optional
+from urllib.parse import urlparse
 
 # Suppress noisy warnings before importing libraries
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+# Configure logging early so all modules can use it
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger(__name__)
 
 # ---------------------------
 # Model Store Configuration (MUST be before HuggingFace imports)
@@ -38,23 +48,22 @@ def resolve_snapshot_path(model_id: str) -> Optional[str]:
     Returns None if not found (will fall back to downloading).
     """
     if "/" not in model_id:
-        print(f"[ModelStore] MODEL_ID '{model_id}' is not in 'org/name' format")
+        log.warning("MODEL_ID '%s' is not in 'org/name' format", model_id)
         return None
     
     org, name = model_id.split("/", 1)
     model_root = os.path.join(HF_CACHE_ROOT, f"models--{org}--{name}")
     
-    print(f"[ModelStore] MODEL_ID: {model_id}")
-    print(f"[ModelStore] Model root: {model_root}")
+    log.info("MODEL_ID: %s", model_id)
+    log.info("Model root: %s", model_root)
     
     if not os.path.isdir(model_root):
-        print(f"[ModelStore] Cache directory not found: {model_root}")
-        # Debug: show what exists in cache
+        log.info("Cache directory not found: %s", model_root)
         if os.path.isdir(HF_CACHE_ROOT):
             try:
                 existing = sorted(os.listdir(HF_CACHE_ROOT))[:10]
-                print(f"[ModelStore] Available in cache: {existing}")
-            except Exception:
+                log.info("Available in cache: %s", existing)
+            except OSError:
                 pass
         return None
     
@@ -67,26 +76,26 @@ def resolve_snapshot_path(model_id: str) -> Optional[str]:
             snapshot_hash = f.read().strip()
         candidate = os.path.join(snapshots_dir, snapshot_hash)
         if os.path.isdir(candidate):
-            print(f"[ModelStore] Using snapshot from refs/main: {candidate}")
+            log.info("Using snapshot from refs/main: %s", candidate)
             return candidate
         else:
-            print(f"[ModelStore] Snapshot from refs/main not found: {candidate}")
+            log.warning("Snapshot from refs/main not found: %s", candidate)
     
     # 2) Fallback: list snapshots directory and pick first one
     if not os.path.isdir(snapshots_dir):
-        print(f"[ModelStore] Snapshots directory not found: {snapshots_dir}")
+        log.warning("Snapshots directory not found: %s", snapshots_dir)
         return None
     
     versions = [d for d in os.listdir(snapshots_dir)
                 if os.path.isdir(os.path.join(snapshots_dir, d))]
     
     if not versions:
-        print(f"[ModelStore] No snapshot subdirectories found under {snapshots_dir}")
+        log.warning("No snapshot subdirectories found under %s", snapshots_dir)
         return None
     
     versions.sort()
     chosen = os.path.join(snapshots_dir, versions[0])
-    print(f"[ModelStore] Using first available snapshot: {chosen}")
+    log.info("Using first available snapshot: %s", chosen)
     return chosen
 
 
@@ -95,37 +104,32 @@ LOCAL_MODEL_PATH = resolve_snapshot_path(MODEL_ID)
 
 if LOCAL_MODEL_PATH:
     # Force offline mode - MUST be set before importing transformers/huggingface_hub
-    print("[ModelStore] Cache found, enabling offline mode")
+    log.info("Cache found, enabling offline mode")
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
 else:
-    print("[ModelStore] No cache found, will download from HuggingFace")
-    # Authenticate if HF_TOKEN provided
+    log.info("No cache found, will download from HuggingFace")
     hf_token = os.environ.get("HF_TOKEN")
     if hf_token:
-        print("[ModelStore] HF_TOKEN found, will authenticate")
+        log.info("HF_TOKEN found, will authenticate")
 
 # ---------------------------
 # Now safe to import HuggingFace libraries
 # ---------------------------
 
-import runpod
-import requests
-import torch
-import torchaudio
+import runpod  # noqa: E402
+import requests  # noqa: E402
+import torch  # noqa: E402
+import torchaudio  # noqa: E402
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
-    datefmt="%H:%M:%S"
-)
-log = logging.getLogger(__name__)
 logging.getLogger("transformers").setLevel(logging.ERROR)
 logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
 
 # Constants
-SAMPLE_RATE = 48000
+SAMPLE_RATE = 48_000
+MAX_AUDIO_BYTES = 100 * 1024 * 1024  # 100 MB per audio item
+MAX_BATCH_SIZE = 16
+ALLOWED_OUTPUT_FORMATS = {"wav", "flac", "ogg", "mp3"}
 
 # Global model instances (loaded once during cold start)
 model = None
@@ -160,32 +164,59 @@ def load_model():
     log.info("Model loaded successfully")
 
 
+def _validate_audio_url(url: str) -> None:
+    """Reject non-HTTP schemes and private/loopback IPs (SSRF mitigation)."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"Unsupported URL scheme: {parsed.scheme!r}")
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError("URL has no hostname")
+    try:
+        ip = ipaddress.ip_address(hostname)
+        if ip.is_private or ip.is_loopback or ip.is_link_local:
+            raise ValueError("URLs pointing to private/loopback addresses are not allowed")
+    except ValueError as exc:
+        if "not allowed" in str(exc):
+            raise
+        # hostname is a DNS name, not a raw IP — allow it through
+
+
 def decode_audio(audio_url: Optional[str] = None, audio_base64: Optional[str] = None) -> torch.Tensor:
     """
     Decode audio from URL or base64 string.
     Returns tensor at 48kHz sample rate.
     """
     if audio_url:
-        # Download from URL
-        response = requests.get(audio_url, timeout=60)
+        _validate_audio_url(audio_url)
+        response = requests.get(audio_url, timeout=60, stream=True)
         response.raise_for_status()
-        audio_bytes = response.content
+        chunks = []
+        total = 0
+        for chunk in response.iter_content(chunk_size=1024 * 1024):
+            total += len(chunk)
+            if total > MAX_AUDIO_BYTES:
+                response.close()
+                raise ValueError(
+                    f"Audio download exceeds {MAX_AUDIO_BYTES // (1024 * 1024)} MB limit"
+                )
+            chunks.append(chunk)
+        audio_bytes = b"".join(chunks)
     elif audio_base64:
-        # Decode base64
+        if len(audio_base64) > MAX_AUDIO_BYTES * 4 // 3:
+            raise ValueError("Base64 audio payload exceeds size limit")
         audio_bytes = base64.b64decode(audio_base64)
     else:
         raise ValueError("Either audio_url or audio_base64 must be provided")
-    
-    # Write to temp file and load with torchaudio
+
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as tmp:
         tmp.write(audio_bytes)
         tmp.flush()
         wav, sr = torchaudio.load(tmp.name)
-    
-    # Resample to 48kHz if needed
+
     if sr != SAMPLE_RATE:
         wav = torchaudio.functional.resample(wav, sr, SAMPLE_RATE)
-    
+
     return wav
 
 
@@ -205,33 +236,42 @@ def validate_input(job_input: dict) -> tuple[list, dict]:
     Validate and parse input, returning items list and global options.
     """
     items = job_input.get("items", [])
-    
+
     if not items:
         raise ValueError("At least one item is required in 'items' array")
-    
-    # Validate each item
+
+    if len(items) > MAX_BATCH_SIZE:
+        raise ValueError(
+            f"Batch size {len(items)} exceeds maximum of {MAX_BATCH_SIZE}"
+        )
+
     for i, item in enumerate(items):
         if not item.get("audio_url") and not item.get("audio_base64"):
             raise ValueError(f"Item {i}: Either 'audio_url' or 'audio_base64' is required")
         if not item.get("description"):
             raise ValueError(f"Item {i}: 'description' is required")
-    
-    # Global options
+
     return_target = job_input.get("return_target", True)
     return_residual = job_input.get("return_residual", False)
-    
-    # At least one output must be requested
+
     if not return_target and not return_residual:
-        return_target = True  # Default to target if neither specified
-    
+        return_target = True
+
+    output_format = job_input.get("output_format", "wav")
+    if output_format not in ALLOWED_OUTPUT_FORMATS:
+        raise ValueError(
+            f"Unsupported output_format: {output_format!r}. "
+            f"Allowed: {sorted(ALLOWED_OUTPUT_FORMATS)}"
+        )
+
     options = {
         "predict_spans": job_input.get("predict_spans", False),
         "reranking_candidates": min(max(job_input.get("reranking_candidates", 1), 1), 16),
         "return_target": return_target,
         "return_residual": return_residual,
-        "output_format": job_input.get("output_format", "wav"),
+        "output_format": output_format,
     }
-    
+
     return items, options
 
 
@@ -239,17 +279,14 @@ def handler(job):
     """
     RunPod serverless handler for SAM-Audio batch inference.
     """
+    job_id = job.get("id", "unknown")
     try:
         job_input = job.get("input", {})
-        
-        # Validate input
         items, options = validate_input(job_input)
-        
-        # Load model (no-op if already loaded)
+
         load_model()
-        
-        # Decode all audio items
-        log.info(f"Processing batch of {len(items)} items")
+
+        log.info("[%s] Processing batch of %d items", job_id, len(items))
         audios = []
         descriptions = []
         
@@ -307,17 +344,20 @@ def handler(job):
             "sample_rate": SAMPLE_RATE,
         }
     
-    except Exception as e:
-        log.exception("Handler error")
+    except ValueError as e:
+        log.warning("[%s] Validation error: %s", job_id, e)
         return {"error": str(e)}
+    except Exception:
+        log.exception("[%s] Handler error", job_id)
+        return {"error": "Internal processing error"}
 
 
 # ---------------------------
 # Startup
 # ---------------------------
 
-print("[Handler] Initializing SAM-Audio handler...")
+log.info("Initializing SAM-Audio handler...")
 load_model()
-print("[Handler] Model loaded, starting RunPod serverless...")
+log.info("Model loaded, starting RunPod serverless...")
 
 runpod.serverless.start({"handler": handler})

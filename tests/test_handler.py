@@ -1,0 +1,231 @@
+"""
+Unit tests for the SAM-Audio RunPod handler.
+
+These tests cover validation, URL safety, encoding, and error handling.
+No GPU or SAM model required.
+"""
+
+import base64
+import io
+import sys
+from unittest.mock import MagicMock, patch
+
+import pytest
+import torch
+import torchaudio
+
+# Mock sam_audio and runpod.serverless.start so importing handler doesn't
+# try to load the model or start the server.
+sys.modules["sam_audio"] = MagicMock()
+
+with patch("runpod.serverless.start"):
+    import handler
+
+
+# ---------------------------------------------------------------------------
+# validate_input
+# ---------------------------------------------------------------------------
+
+class TestValidateInput:
+    def test_rejects_empty_items(self):
+        with pytest.raises(ValueError, match="At least one item"):
+            handler.validate_input({"items": []})
+
+    def test_rejects_missing_items(self):
+        with pytest.raises(ValueError, match="At least one item"):
+            handler.validate_input({})
+
+    def test_rejects_oversized_batch(self):
+        items = [
+            {"audio_url": "https://example.com/a.wav", "description": "voice"}
+            for _ in range(handler.MAX_BATCH_SIZE + 1)
+        ]
+        with pytest.raises(ValueError, match="exceeds maximum"):
+            handler.validate_input({"items": items})
+
+    def test_rejects_missing_audio(self):
+        with pytest.raises(ValueError, match="audio_url"):
+            handler.validate_input({"items": [{"description": "voice"}]})
+
+    def test_rejects_missing_description(self):
+        with pytest.raises(ValueError, match="description"):
+            handler.validate_input({
+                "items": [{"audio_url": "https://example.com/a.wav"}]
+            })
+
+    def test_rejects_bad_output_format(self):
+        with pytest.raises(ValueError, match="Unsupported output_format"):
+            handler.validate_input({
+                "items": [{"audio_url": "https://example.com/a.wav", "description": "voice"}],
+                "output_format": "exe",
+            })
+
+    def test_valid_input(self):
+        items, options = handler.validate_input({
+            "items": [
+                {"audio_url": "https://example.com/a.wav", "description": "voice"},
+            ],
+            "output_format": "flac",
+            "return_residual": True,
+        })
+        assert len(items) == 1
+        assert options["output_format"] == "flac"
+        assert options["return_residual"] is True
+        assert options["return_target"] is True
+
+    def test_defaults_to_target_when_neither_requested(self):
+        _, options = handler.validate_input({
+            "items": [{"audio_url": "https://example.com/a.wav", "description": "v"}],
+            "return_target": False,
+            "return_residual": False,
+        })
+        assert options["return_target"] is True
+
+    def test_reranking_candidates_clamped(self):
+        _, options = handler.validate_input({
+            "items": [{"audio_url": "https://example.com/a.wav", "description": "v"}],
+            "reranking_candidates": 100,
+        })
+        assert options["reranking_candidates"] == 16
+
+        _, options = handler.validate_input({
+            "items": [{"audio_url": "https://example.com/a.wav", "description": "v"}],
+            "reranking_candidates": -5,
+        })
+        assert options["reranking_candidates"] == 1
+
+
+# ---------------------------------------------------------------------------
+# _validate_audio_url
+# ---------------------------------------------------------------------------
+
+class TestValidateAudioUrl:
+    def test_rejects_file_scheme(self):
+        with pytest.raises(ValueError, match="Unsupported URL scheme"):
+            handler._validate_audio_url("file:///etc/passwd")
+
+    def test_rejects_ftp_scheme(self):
+        with pytest.raises(ValueError, match="Unsupported URL scheme"):
+            handler._validate_audio_url("ftp://example.com/audio.wav")
+
+    def test_rejects_loopback_ip(self):
+        with pytest.raises(ValueError, match="private/loopback"):
+            handler._validate_audio_url("http://127.0.0.1/audio.wav")
+
+    def test_rejects_private_ip(self):
+        with pytest.raises(ValueError, match="private/loopback"):
+            handler._validate_audio_url("http://10.0.0.1/audio.wav")
+
+    def test_rejects_link_local_ip(self):
+        with pytest.raises(ValueError, match="private/loopback"):
+            handler._validate_audio_url("http://169.254.1.1/audio.wav")
+
+    def test_allows_https(self):
+        handler._validate_audio_url("https://example.com/audio.wav")
+
+    def test_allows_http(self):
+        handler._validate_audio_url("http://example.com/audio.wav")
+
+    def test_rejects_no_hostname(self):
+        with pytest.raises(ValueError, match="no hostname"):
+            handler._validate_audio_url("http:///audio.wav")
+
+
+# ---------------------------------------------------------------------------
+# encode_audio / decode_audio roundtrip
+# ---------------------------------------------------------------------------
+
+_can_save_audio = True
+try:
+    _buf = io.BytesIO()
+    torchaudio.save(_buf, torch.zeros(1, 100), 48000, format="wav")
+except (ImportError, RuntimeError):
+    _can_save_audio = False
+
+_skip_no_codec = pytest.mark.skipif(
+    not _can_save_audio,
+    reason="torchaudio.save requires torchcodec (not installed in test env)",
+)
+
+
+class TestEncodeAudio:
+    @_skip_no_codec
+    def test_roundtrip_wav(self):
+        wav = torch.randn(1, 4800)
+        encoded = handler.encode_audio(wav, "wav")
+
+        raw = base64.b64decode(encoded)
+        buffer = io.BytesIO(raw)
+        decoded, sr = torchaudio.load(buffer)
+
+        assert sr == handler.SAMPLE_RATE
+        assert decoded.shape == wav.shape
+
+    @_skip_no_codec
+    def test_1d_tensor_gets_unsqueezed(self):
+        wav = torch.randn(4800)
+        encoded = handler.encode_audio(wav, "wav")
+        raw = base64.b64decode(encoded)
+        buffer = io.BytesIO(raw)
+        decoded, sr = torchaudio.load(buffer)
+        assert decoded.shape == (1, 4800)
+
+
+# ---------------------------------------------------------------------------
+# decode_audio size limits
+# ---------------------------------------------------------------------------
+
+class TestDecodeAudioLimits:
+    def test_base64_size_limit(self):
+        # Create a base64 string that exceeds the limit
+        oversized = "A" * (handler.MAX_AUDIO_BYTES * 4 // 3 + 1)
+        with pytest.raises(ValueError, match="size limit"):
+            handler.decode_audio(audio_base64=oversized)
+
+    def test_url_download_size_limit(self):
+        def fake_iter_content(chunk_size):
+            # Yield chunks that exceed the limit
+            chunk = b"\x00" * (1024 * 1024)
+            for _ in range(110):  # 110 MB > 100 MB limit
+                yield chunk
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.iter_content = fake_iter_content
+
+        with patch("handler.requests.get", return_value=mock_response):
+            with pytest.raises(ValueError, match="exceeds.*limit"):
+                handler.decode_audio(audio_url="https://example.com/big.wav")
+
+    def test_rejects_no_audio_source(self):
+        with pytest.raises(ValueError, match="audio_url or audio_base64"):
+            handler.decode_audio()
+
+
+# ---------------------------------------------------------------------------
+# handler error sanitization
+# ---------------------------------------------------------------------------
+
+class TestHandlerErrors:
+    def test_validation_error_returned(self):
+        result = handler.handler({"id": "test-1", "input": {"items": []}})
+        assert "error" in result
+        assert "At least one item" in result["error"]
+
+    def test_internal_error_sanitized(self):
+        """Errors from model inference should not leak tracebacks."""
+        with patch.object(handler, "validate_input", side_effect=RuntimeError("secret GPU info")):
+            result = handler.handler({"id": "test-2", "input": {}})
+        assert result["error"] == "Internal processing error"
+        assert "secret" not in result["error"]
+
+    def test_bad_format_error_returned(self):
+        result = handler.handler({
+            "id": "test-3",
+            "input": {
+                "items": [{"audio_url": "https://example.com/a.wav", "description": "v"}],
+                "output_format": "exe",
+            },
+        })
+        assert "error" in result
+        assert "Unsupported output_format" in result["error"]
