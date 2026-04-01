@@ -27,6 +27,7 @@ log = logging.getLogger(__name__)
 
 HF_CACHE_ROOT = "/runpod-volume/huggingface-cache/hub"
 MODEL_ID = os.environ.get("MODEL_NAME", "facebook/sam-audio-small")
+_MODEL_SOURCE_UNSET = object()
 
 
 def resolve_snapshot_path(model_id: str) -> Optional[str]:
@@ -38,15 +39,15 @@ def resolve_snapshot_path(model_id: str) -> Optional[str]:
     org, name = model_id.split("/", 1)
     model_root = os.path.join(HF_CACHE_ROOT, f"models--{org}--{name}")
     
-    log.info("MODEL_ID: %s", model_id)
-    log.info("Model root: %s", model_root)
+    log.info("cache probe: model id %s", model_id)
+    log.info("cache probe: model root %s", model_root)
     
     if not os.path.isdir(model_root):
-        log.info("no cache at %s", model_root)
+        log.info("cache probe: miss")
         if os.path.isdir(HF_CACHE_ROOT):
             try:
                 existing = sorted(os.listdir(HF_CACHE_ROOT))[:10]
-                log.info("cache contents: %s", existing)
+                log.info("cache probe: root contents %s", existing)
             except OSError:
                 pass
         return None
@@ -59,7 +60,8 @@ def resolve_snapshot_path(model_id: str) -> Optional[str]:
             snapshot_hash = f.read().strip()
         candidate = os.path.join(snapshots_dir, snapshot_hash)
         if os.path.isdir(candidate):
-            log.info("using cached snapshot: %s", candidate)
+            log.info("cache probe: hit")
+            log.info("cache probe: using cached snapshot %s", candidate)
             return candidate
         else:
             log.warning("snapshot hash not found: %s", candidate)
@@ -77,21 +79,12 @@ def resolve_snapshot_path(model_id: str) -> Optional[str]:
 
     versions.sort()
     chosen = os.path.join(snapshots_dir, versions[0])
-    log.info("using snapshot: %s", chosen)
+    log.info("cache probe: hit")
+    log.info("cache probe: using snapshot %s", chosen)
     return chosen
 
 
-LOCAL_MODEL_PATH = resolve_snapshot_path(MODEL_ID)
-
-if LOCAL_MODEL_PATH:
-    log.info("cache hit, offline mode")
-    os.environ["HF_HUB_OFFLINE"] = "1"
-    os.environ["TRANSFORMERS_OFFLINE"] = "1"
-else:
-    log.info("no cache, will download from huggingface")
-    hf_token = os.environ.get("HF_TOKEN")
-    if hf_token:
-        log.info("HF_TOKEN set")
+LOCAL_MODEL_PATH = None
 
 import runpod  # noqa: E402
 import requests  # noqa: E402
@@ -110,21 +103,55 @@ model = None
 processor = None
 
 
-def load_model():
+def prepare_model_access() -> Optional[str]:
+    """resolve startup model access and fail fast when the worker cannot boot."""
+    global LOCAL_MODEL_PATH
+
+    LOCAL_MODEL_PATH = resolve_snapshot_path(MODEL_ID)
+    hf_token = os.environ.get("HF_TOKEN")
+
+    log.info("hf_token: %s", "present" if hf_token else "missing")
+
+    if LOCAL_MODEL_PATH:
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
+        log.info("model source: /runpod-volume cache")
+        log.info("cache reuse: enabled")
+        return LOCAL_MODEL_PATH
+
+    os.environ.pop("HF_HUB_OFFLINE", None)
+    os.environ.pop("TRANSFORMERS_OFFLINE", None)
+    log.info("model source: huggingface download")
+    log.info("cache reuse: first-time download required")
+
+    if not hf_token:
+        raise RuntimeError(
+            f"startup blocked: cache miss for {MODEL_ID} and HF_TOKEN is missing. "
+            "attach a /runpod-volume network volume with a cached model or set HF_TOKEN."
+        )
+
+    return None
+
+
+def load_model(model_source=_MODEL_SOURCE_UNSET):
     """load sam-audio model and processor onto gpu."""
     global model, processor
 
     if model is not None:
+        log.info("model already initialized")
         return
+
+    if model_source is _MODEL_SOURCE_UNSET:
+        model_source = prepare_model_access()
 
     from sam_audio import SAMAudio, SAMAudioProcessor
 
-    if LOCAL_MODEL_PATH:
-        log.info("loading model from cache: %s", LOCAL_MODEL_PATH)
-        model = SAMAudio.from_pretrained(LOCAL_MODEL_PATH)
-        processor = SAMAudioProcessor.from_pretrained(LOCAL_MODEL_PATH)
+    if model_source:
+        log.info("model load start: cached snapshot")
+        model = SAMAudio.from_pretrained(model_source)
+        processor = SAMAudioProcessor.from_pretrained(model_source)
     else:
-        log.info("downloading model: %s", MODEL_ID)
+        log.info("model load start: huggingface")
         hf_token = os.environ.get("HF_TOKEN")
         if hf_token:
             from huggingface_hub import login
@@ -132,8 +159,18 @@ def load_model():
         model = SAMAudio.from_pretrained(MODEL_ID)
         processor = SAMAudioProcessor.from_pretrained(MODEL_ID)
 
-    model = model.eval().half().cuda()
+    model = model.eval()
+    model = model.half().cuda()
+    log.info("gpu move complete")
     log.info("model ready")
+
+
+def bootstrap_worker():
+    """warm the worker before registering it with runpod."""
+    log.info("worker bootstrap start")
+    model_source = prepare_model_access()
+    load_model(model_source=model_source)
+    log.info("worker ready")
 
 
 def _validate_audio_url(url: str) -> None:
@@ -315,8 +352,17 @@ def handler(job):
         return {"error": "Internal processing error"}
 
 
-log.info("starting sam-audio handler...")
-load_model()
-log.info("ready")
+def main():
+    """bootstrap the worker, then hand control to runpod."""
+    log.info("starting sam-audio handler...")
+    try:
+        bootstrap_worker()
+    except Exception:
+        log.exception("worker bootstrap failed")
+        raise
 
-runpod.serverless.start({"handler": handler})
+    runpod.serverless.start({"handler": handler})
+
+
+if __name__ == "__main__":
+    main()

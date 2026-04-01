@@ -35,9 +35,16 @@ docker push your-registry/sam-audio-serverless:latest
 2. create a new endpoint with your docker image
 3. set environment variables:
    - `HF_TOKEN` — huggingface access token (required, model is gated)
-   - `MODEL_NAME` — override model variant (optional, defaults to `facebook/sam-audio-small`)
+   - `MODEL_NAME` — keep `facebook/sam-audio-small` for the first stable rollout
+4. configure the endpoint for warm-worker startup:
+   - set `workersMin` to `1`
+   - enable flashboot
+   - attach a network volume so `/runpod-volume` persists the huggingface cache
+   - keep the first rollout in a single datacenter, or attach a matching network volume in every datacenter you enable
 
 the model requires huggingface access — request it at the [sam-audio-small](https://huggingface.co/facebook/sam-audio-small) repo page first.
+
+the runpod console default payload is not valid for this handler. a test payload must use `input.items[]`, not `"prompt": "hello world"`.
 
 ## api
 
@@ -54,6 +61,52 @@ the model requires huggingface access — request it at the [sam-audio-small](ht
     ],
     "return_target": true,
     "return_residual": false,
+    "output_format": "wav",
+    "predict_spans": false,
+    "reranking_candidates": 1
+  }
+}
+```
+
+### console test payloads
+
+single item:
+
+```json
+{
+  "input": {
+    "items": [
+      {
+        "audio_url": "https://example.com/audio.wav",
+        "description": "drums"
+      }
+    ],
+    "return_target": true,
+    "return_residual": false,
+    "output_format": "wav",
+    "predict_spans": false,
+    "reranking_candidates": 1
+  }
+}
+```
+
+multiple items:
+
+```json
+{
+  "input": {
+    "items": [
+      {
+        "audio_url": "https://example.com/song.wav",
+        "description": "vocals"
+      },
+      {
+        "audio_url": "https://example.com/song.wav",
+        "description": "drums"
+      }
+    ],
+    "return_target": true,
+    "return_residual": true,
     "output_format": "wav",
     "predict_spans": false,
     "reranking_candidates": 1

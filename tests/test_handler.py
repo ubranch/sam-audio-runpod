@@ -14,12 +14,9 @@ import pytest
 import torch
 import torchaudio
 
-# Mock sam_audio and runpod.serverless.start so importing handler doesn't
-# try to load the model or start the server.
+# mock sam_audio so importing handler does not require the real package.
 sys.modules["sam_audio"] = MagicMock()
-
-with patch("runpod.serverless.start"):
-    import handler
+import handler  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +90,70 @@ class TestValidateInput:
             "reranking_candidates": -5,
         })
         assert options["reranking_candidates"] == 1
+
+
+# ---------------------------------------------------------------------------
+# bootstrap / startup
+# ---------------------------------------------------------------------------
+
+class TestBootstrapWorker:
+    def test_bootstrap_uses_cache_without_token(self, caplog):
+        caplog.set_level("INFO")
+
+        with patch.dict("os.environ", {"HF_TOKEN": ""}, clear=False):
+            with patch.object(handler, "LOCAL_MODEL_PATH", None):
+                with patch.object(
+                    handler,
+                    "resolve_snapshot_path",
+                    return_value="/runpod-volume/cache/snapshot",
+                ) as resolve_snapshot_path:
+                    with patch.object(handler, "load_model") as load_model:
+                        handler.bootstrap_worker()
+
+        resolve_snapshot_path.assert_called_once_with(handler.MODEL_ID)
+        load_model.assert_called_once_with(model_source="/runpod-volume/cache/snapshot")
+        assert "hf_token: missing" in caplog.text
+        assert "model source: /runpod-volume cache" in caplog.text
+        assert "worker ready" in caplog.text
+
+    def test_bootstrap_requires_token_on_cache_miss(self):
+        with patch.dict("os.environ", {"HF_TOKEN": ""}, clear=False):
+            with patch.object(handler, "LOCAL_MODEL_PATH", None):
+                with patch.object(handler, "resolve_snapshot_path", return_value=None):
+                    with pytest.raises(RuntimeError, match="HF_TOKEN is missing"):
+                        handler.bootstrap_worker()
+
+
+class TestLoadModel:
+    def test_load_model_initializes_once(self):
+        fake_model = MagicMock()
+        fake_model.eval.return_value = fake_model
+        fake_model.half.return_value = fake_model
+        fake_model.cuda.return_value = fake_model
+
+        fake_processor = MagicMock()
+        fake_module = MagicMock()
+        fake_module.SAMAudio.from_pretrained.return_value = fake_model
+        fake_module.SAMAudioProcessor.from_pretrained.return_value = fake_processor
+
+        with patch.dict(sys.modules, {"sam_audio": fake_module}):
+            with patch.object(handler, "model", None):
+                with patch.object(handler, "processor", None):
+                    handler.load_model(model_source="/runpod-volume/cache/snapshot")
+                    handler.load_model(model_source="/runpod-volume/cache/snapshot")
+
+        assert fake_module.SAMAudio.from_pretrained.call_count == 1
+        assert fake_module.SAMAudioProcessor.from_pretrained.call_count == 1
+
+
+class TestMain:
+    def test_main_bootstraps_before_start(self):
+        with patch.object(handler, "bootstrap_worker") as bootstrap_worker:
+            with patch.object(handler.runpod.serverless, "start") as start:
+                handler.main()
+
+        bootstrap_worker.assert_called_once_with()
+        start.assert_called_once_with({"handler": handler.handler})
 
 
 # ---------------------------------------------------------------------------
