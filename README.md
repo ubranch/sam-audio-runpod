@@ -5,16 +5,16 @@ Audio source separation using Meta's [Segment Anything Audio (SAM-Audio)](https:
 ## Features
 
 - **Text-prompted separation**: Describe what you want to isolate (e.g., "Drums", "Vocals", "A man speaking")
-- **Multiple model sizes**: small, base, large
+- **Batch processing**: Process multiple audio items in a single request (up to 16)
+- **Multiple output formats**: WAV, FLAC, OGG, MP3
 - **RunPod Serverless**: Deploy as a scalable serverless endpoint
+- **Production hardened**: Input validation, SSRF protection, size limits, sanitized errors
 
 ## Local Development
 
 ### Setup
 
 ```bash
-cd sam_service
-
 # Create virtual environment with Python 3.11+
 uv venv --python 3.11
 source .venv/bin/activate
@@ -42,14 +42,19 @@ The SAM Audio model requires Hugging Face authentication:
    huggingface-cli login
    ```
 
-### Run Locally
+### Running Tests
 
 ```bash
-# Convert audio to WAV if needed
-ffmpeg -i test.mp3 -ar 16000 test.wav
+pip install -r requirements-dev.txt
+pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+pip install runpod requests
+pytest tests/ -v
+```
 
-# Run the test script
-python test.py
+### Linting
+
+```bash
+ruff check handler.py tests/
 ```
 
 ## RunPod Serverless Deployment
@@ -57,13 +62,8 @@ python test.py
 ### Build Docker Image
 
 ```bash
-# Build the image
 docker build -t sam-audio-serverless .
-
-# Tag for your registry
 docker tag sam-audio-serverless your-registry/sam-audio-serverless:latest
-
-# Push to registry
 docker push your-registry/sam-audio-serverless:latest
 ```
 
@@ -73,53 +73,83 @@ docker push your-registry/sam-audio-serverless:latest
 2. Create a new endpoint
 3. Select your Docker image
 4. Configure GPU (recommended: RTX 3090 or better for `large` model)
-5. **Important:** Set environment variables:
+5. Set environment variables:
    - `HF_TOKEN`: Your Hugging Face access token (required for gated model access)
+   - `MODEL_NAME` (optional): Override model ID (default: `facebook/sam-audio-large`)
 
-#### Getting Your HF_TOKEN
+## API Usage
 
-1. Go to [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)
-2. Create a new token with "Read" access
-3. Request access to the model at [facebook/sam-audio-large](https://huggingface.co/facebook/sam-audio-large)
-4. Add the token as `HF_TOKEN` in your RunPod endpoint environment variables
+### Request Format
 
-### API Usage
-
-#### Request Format
+The API accepts batch requests with one or more items:
 
 ```json
 {
   "input": {
-    "audio_url": "https://example.com/audio.wav",
-    "description": "Drums",
-    "model_size": "large"
+    "items": [
+      {
+        "audio_url": "https://example.com/audio.wav",
+        "description": "Drums"
+      },
+      {
+        "audio_base64": "<base64-encoded-audio>",
+        "description": "Vocals"
+      }
+    ],
+    "return_target": true,
+    "return_residual": false,
+    "output_format": "wav",
+    "predict_spans": false,
+    "reranking_candidates": 1
   }
 }
 ```
 
-Or with base64 audio:
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `items` | array | *required* | Array of items to process (max 16) |
+| `items[].audio_url` | string | - | URL to audio file (must be http/https) |
+| `items[].audio_base64` | string | - | Base64-encoded audio data |
+| `items[].description` | string | *required* | Text description of the sound to isolate |
+| `return_target` | bool | `true` | Return the isolated audio |
+| `return_residual` | bool | `false` | Return the residual (everything except the target) |
+| `output_format` | string | `"wav"` | Output format: `wav`, `flac`, `ogg`, or `mp3` |
+| `predict_spans` | bool | `false` | Predict time spans of the target sound |
+| `reranking_candidates` | int | `1` | Number of reranking candidates (1-16) |
+
+Each item must provide either `audio_url` or `audio_base64`, plus a `description`.
+
+### Response Format
 
 ```json
 {
-  "input": {
-    "audio_base64": "base64_encoded_audio_data",
-    "description": "Vocals",
-    "model_size": "large"
-  }
+  "results": [
+    {
+      "duration_seconds": 10.5,
+      "target_base64": "<base64-encoded-isolated-audio>",
+      "residual_base64": "<base64-encoded-residual-audio>"
+    }
+  ],
+  "sample_rate": 48000
 }
 ```
 
-#### Response Format
+Error responses:
 
 ```json
 {
-  "target_base64": "base64_encoded_isolated_audio",
-  "residual_base64": "base64_encoded_residual_audio",
-  "sample_rate": 16000,
-  "description": "Drums",
-  "status": "success"
+  "error": "Description of what went wrong"
 }
 ```
+
+### Limits
+
+| Limit | Value |
+|-------|-------|
+| Max batch size | 16 items |
+| Max audio file size | 100 MB |
+| Sample rate | 48 kHz (auto-resampled) |
+| Supported input formats | WAV, MP3, FLAC, OGG, and anything ffmpeg supports |
 
 ### Example Python Client
 
@@ -128,21 +158,23 @@ import runpod
 import base64
 
 runpod.api_key = "your_api_key"
-
-# Create endpoint instance
 endpoint = runpod.Endpoint("your_endpoint_id")
 
-# Run separation
 result = endpoint.run_sync({
     "input": {
-        "audio_url": "https://example.com/song.wav",
-        "description": "Drums"
+        "items": [
+            {
+                "audio_url": "https://example.com/song.wav",
+                "description": "Drums"
+            }
+        ],
+        "return_target": True,
+        "output_format": "wav"
     }
 })
 
-# Decode and save result
-if result.get("status") == "success":
-    target_audio = base64.b64decode(result["target_base64"])
+if "results" in result:
+    target_audio = base64.b64decode(result["results"][0]["target_base64"])
     with open("drums_isolated.wav", "wb") as f:
         f.write(target_audio)
 ```
@@ -164,7 +196,8 @@ SAM-Audio can isolate various sounds:
 | base | ~8GB | Medium | Better |
 | large | ~16GB | Slower | Best |
 
+Set via the `MODEL_NAME` environment variable (e.g., `facebook/sam-audio-small`).
+
 ## License
 
 SAM-Audio is licensed under the [SAM License](https://github.com/facebookresearch/sam-audio/blob/main/LICENSE).
-
