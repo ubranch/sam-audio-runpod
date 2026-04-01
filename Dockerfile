@@ -29,10 +29,19 @@ RUN pip install --no-cache-dir \
     torchvision==0.20.1 \
     --index-url https://download.pytorch.org/whl/cu124
 
-# install sam-audio the same way as the working upstream fork and pin the
-# currently published sam-audio revision to avoid future drift.
+# install sam-audio dependencies from the pinned upstream revision.
 RUN pip install --no-cache-dir \
     git+https://github.com/facebookresearch/sam-audio.git@68b48d48fff1ad776d3afefbe634eb5f5d60ba7b
+
+# the upstream package install can leave a non-importable wheel in this image,
+# so keep the pinned source tree on PYTHONPATH as the runtime import source.
+RUN git clone --filter=blob:none https://github.com/facebookresearch/sam-audio.git /opt/sam-audio && \
+    cd /opt/sam-audio && \
+    git checkout 68b48d48fff1ad776d3afefbe634eb5f5d60ba7b
+ENV PYTHONPATH="/opt/sam-audio"
+
+# fail the image build if sam_audio is still not importable.
+RUN python -c "import importlib.util; spec = importlib.util.find_spec('sam_audio'); assert spec, 'sam_audio not found'; print('sam_audio ok:', spec.origin)"
 
 # runpod handler deps
 RUN pip install --no-cache-dir runpod==1.8.2 requests==2.32.5
