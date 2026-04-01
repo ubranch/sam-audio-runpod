@@ -7,6 +7,7 @@ No GPU or SAM model required.
 
 import base64
 import io
+import os
 import sys
 from unittest.mock import MagicMock, patch
 
@@ -97,6 +98,15 @@ class TestValidateInput:
 # ---------------------------------------------------------------------------
 
 class TestBootstrapWorker:
+    def test_configure_cache_environment_uses_runpod_volume(self):
+        with patch.dict("os.environ", {}, clear=True):
+            handler.configure_cache_environment()
+
+        assert os.environ["HF_HOME"] == handler.HF_HOME_ROOT
+        assert os.environ["HF_HUB_CACHE"] == handler.HF_CACHE_ROOT
+        assert os.environ["TRANSFORMERS_CACHE"] == handler.HF_CACHE_ROOT
+        assert os.environ["TORCH_HOME"] == handler.TORCH_CACHE_ROOT
+
     def test_bootstrap_uses_cache_without_token(self, caplog):
         caplog.set_level("INFO")
 
@@ -151,6 +161,37 @@ class TestLoadModel:
 
         assert fake_module.SAMAudio.from_pretrained.call_count == 1
         assert fake_module.SAMAudioProcessor.from_pretrained.call_count == 1
+
+    def test_load_model_downloads_into_runpod_volume_cache(self):
+        fake_model = MagicMock()
+        fake_model.eval.return_value = fake_model
+        fake_model.half.return_value = fake_model
+        fake_model.cuda.return_value = fake_model
+
+        fake_processor = MagicMock()
+        fake_module = MagicMock()
+        fake_module.SAMAudio.from_pretrained.return_value = fake_model
+        fake_module.SAMAudioProcessor.from_pretrained.return_value = fake_processor
+
+        with patch.dict(sys.modules, {"sam_audio": fake_module}):
+            with patch.dict("os.environ", {"HF_TOKEN": ""}, clear=False):
+                with patch.object(handler, "model", None):
+                    with patch.object(handler, "processor", None):
+                        with patch.object(
+                            handler,
+                            "resolve_snapshot_path",
+                            return_value="/runpod-volume/huggingface-cache/hub/models--mrfakename--sam-audio-large/snapshots/mock",
+                        ):
+                            handler.load_model(model_source=None)
+
+        fake_module.SAMAudio.from_pretrained.assert_called_once_with(
+            handler.MODEL_ID,
+            cache_dir=handler.HF_CACHE_ROOT,
+        )
+        fake_module.SAMAudioProcessor.from_pretrained.assert_called_once_with(
+            handler.MODEL_ID,
+            cache_dir=handler.HF_CACHE_ROOT,
+        )
 
 
 class TestMain:

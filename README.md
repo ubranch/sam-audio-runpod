@@ -40,12 +40,21 @@ docker push your-registry/sam-audio-serverless:latest
 4. configure the endpoint for warm-worker startup:
    - set `workersMin` to `1`
    - enable flashboot
-   - attach a network volume so `/runpod-volume` persists the huggingface cache
+   - attach a network volume so `/runpod-volume` persists the huggingface and torch caches
    - keep the first rollout in a single datacenter, or attach a matching network volume in every datacenter you enable
 
 the default rollout now uses the public [mrfakename/sam-audio-large](https://huggingface.co/mrfakename/sam-audio-large) mirror so first-time downloads can work without huggingface gating.
 
 if you override `MODEL_NAME` to a `facebook/sam-audio-*` repo, that repo is gated and you must provide `HF_TOKEN`.
+
+the worker now pins all model downloads to these paths:
+
+- `HF_HOME=/runpod-volume/huggingface-cache`
+- `HF_HUB_CACHE=/runpod-volume/huggingface-cache/hub`
+- `TRANSFORMERS_CACHE=/runpod-volume/huggingface-cache/hub`
+- `TORCH_HOME=/runpod-volume/torch-cache`
+
+that means the first worker downloads the model into the network volume, and later workers in the same datacenter reuse the cached snapshot automatically.
 
 the runpod console default payload is not valid for this handler. a test payload must use `input.items[]`, not `"prompt": "hello world"`.
 

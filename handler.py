@@ -25,9 +25,22 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-HF_CACHE_ROOT = "/runpod-volume/huggingface-cache/hub"
+HF_HOME_ROOT = "/runpod-volume/huggingface-cache"
+HF_CACHE_ROOT = os.path.join(HF_HOME_ROOT, "hub")
+TORCH_CACHE_ROOT = "/runpod-volume/torch-cache"
 MODEL_ID = os.environ.get("MODEL_NAME", "mrfakename/sam-audio-large")
 _MODEL_SOURCE_UNSET = object()
+
+
+def configure_cache_environment() -> None:
+    """force model and torch caches onto the runpod volume."""
+    os.environ["HF_HOME"] = HF_HOME_ROOT
+    os.environ["HF_HUB_CACHE"] = HF_CACHE_ROOT
+    os.environ["TRANSFORMERS_CACHE"] = HF_CACHE_ROOT
+    os.environ["TORCH_HOME"] = TORCH_CACHE_ROOT
+
+
+configure_cache_environment()
 
 
 def resolve_snapshot_path(model_id: str) -> Optional[str]:
@@ -107,9 +120,13 @@ def prepare_model_access() -> Optional[str]:
     """resolve startup model access and prepare cache/offline flags."""
     global LOCAL_MODEL_PATH
 
+    configure_cache_environment()
     LOCAL_MODEL_PATH = resolve_snapshot_path(MODEL_ID)
     hf_token = os.environ.get("HF_TOKEN")
 
+    log.info("cache config: hf_home %s", HF_HOME_ROOT)
+    log.info("cache config: hf_hub_cache %s", HF_CACHE_ROOT)
+    log.info("cache config: torch_home %s", TORCH_CACHE_ROOT)
     log.info("hf_token: %s", "present" if hf_token else "missing")
 
     if LOCAL_MODEL_PATH:
@@ -133,7 +150,7 @@ def prepare_model_access() -> Optional[str]:
 
 def load_model(model_source=_MODEL_SOURCE_UNSET):
     """load sam-audio model and processor onto gpu."""
-    global model, processor
+    global model, processor, LOCAL_MODEL_PATH
 
     if model is not None:
         log.info("model already initialized")
@@ -154,8 +171,12 @@ def load_model(model_source=_MODEL_SOURCE_UNSET):
         if hf_token:
             from huggingface_hub import login
             login(token=hf_token)
-        model = SAMAudio.from_pretrained(MODEL_ID)
-        processor = SAMAudioProcessor.from_pretrained(MODEL_ID)
+        model = SAMAudio.from_pretrained(MODEL_ID, cache_dir=HF_CACHE_ROOT)
+        processor = SAMAudioProcessor.from_pretrained(MODEL_ID, cache_dir=HF_CACHE_ROOT)
+        downloaded_snapshot = resolve_snapshot_path(MODEL_ID)
+        if downloaded_snapshot:
+            LOCAL_MODEL_PATH = downloaded_snapshot
+            log.info("cache warmed: %s", downloaded_snapshot)
 
     model = model.eval()
     model = model.half().cuda()
