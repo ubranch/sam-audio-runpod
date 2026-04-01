@@ -1,5 +1,5 @@
 # sam-audio runpod serverless
-FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.11-dev \
     python3-pip \
     git \
+    curl \
     libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -21,20 +22,20 @@ RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 &
 
 WORKDIR /app
 
-# pytorch + xformers (cuda 12.4)
+# pytorch (cuda 12.4 wheels, forward-compatible with 12.8 runtime)
 RUN pip install --no-cache-dir \
     torch==2.5.1 \
     torchaudio==2.5.1 \
     torchvision==0.20.1 \
-    xformers \
     --index-url https://download.pytorch.org/whl/cu124
 
-# sam-audio runtime deps (installed before facebook packages to satisfy transitive imports)
+# all transitive deps for sam-audio + facebook research packages
 RUN pip install --no-cache-dir \
-    transformers scipy soundfile torchcodec torchdiffeq descript-audiotools eva-decord \
-    einops timm ftfy
+    "transformers>=4.54.0" scipy soundfile torchcodec torchdiffeq \
+    einops timm ftfy xformers pydub numpy audiobox_aesthetics \
+    descript-audiotools eva-decord iopath
 
-# facebook research packages (--no-deps prevents pip from pulling conflicting versions)
+# facebook research packages (--no-deps to prevent torch/torchcodec version conflicts)
 RUN pip install --no-cache-dir --no-deps \
     git+https://github.com/facebookresearch/perception_models.git@unpin-deps
 RUN pip install --no-cache-dir --no-deps \
@@ -43,16 +44,12 @@ RUN pip install --no-cache-dir --no-deps \
     git+https://github.com/facebookresearch/dacvae.git
 RUN pip install --no-cache-dir --no-deps \
     git+https://github.com/facebookresearch/pytorchvideo.git@6cdc929315aab1b5674b6dcf73b16ec99147735f
-RUN pip install --no-cache-dir iopath
+RUN pip install --no-cache-dir --no-deps \
+    git+https://github.com/lematt1991/CLAP.git
 
-# sam-audio: cloned from source because pip produces a broken empty wheel (UNKNOWN-0.0.0)
-RUN git clone --filter=blob:none https://github.com/facebookresearch/sam-audio.git /opt/sam-audio && \
-    cd /opt/sam-audio && \
-    git checkout 68b48d48fff1ad776d3afefbe634eb5f5d60ba7b
+# sam-audio source (pip produces broken UNKNOWN-0.0.0 wheel)
+RUN git clone --filter=blob:none https://github.com/facebookresearch/sam-audio.git /opt/sam-audio
 ENV PYTHONPATH="/opt/sam-audio"
-
-# verify sam_audio is discoverable (full import requires cuda libs only present at runtime)
-RUN python -c "import importlib.util; spec = importlib.util.find_spec('sam_audio'); assert spec, 'sam_audio not found'; print('sam_audio OK:', spec.origin)"
 
 # runpod handler deps
 RUN pip install --no-cache-dir runpod==1.8.2 requests==2.32.5
