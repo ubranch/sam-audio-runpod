@@ -30,9 +30,19 @@ RUN pip install --no-cache-dir \
     torchvision==0.20.1 \
     --index-url https://download.pytorch.org/whl/cu124
 
-# Install sam-audio with all its dependencies
+# Install base dependencies for sam-audio
 RUN pip install --no-cache-dir \
-    git+https://github.com/facebookresearch/sam-audio.git
+    transformers scipy soundfile torchcodec torchdiffeq descript-audiotools eva-decord
+
+# Install Facebook Research packages (--no-deps to avoid dependency conflicts)
+RUN pip install --no-cache-dir --no-deps git+https://github.com/facebookresearch/sam-audio.git && \
+    pip install --no-cache-dir --no-deps git+https://github.com/facebookresearch/perception_models.git@unpin-deps && \
+    pip install --no-cache-dir --no-deps git+https://github.com/facebookresearch/ImageBind.git && \
+    pip install --no-cache-dir --no-deps git+https://github.com/facebookresearch/dacvae.git && \
+    pip install --no-cache-dir --no-deps git+https://github.com/facebookresearch/pytorchvideo.git@6cdc929315aab1b5674b6dcf73b16ec99147735f
+
+# Install iopath (required by pytorchvideo)
+RUN pip install --no-cache-dir iopath
 
 # Install RunPod handler dependencies
 RUN pip install --no-cache-dir runpod requests
