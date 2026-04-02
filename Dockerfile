@@ -29,16 +29,17 @@ ENV HF_HOME=/runpod-volume/huggingface-cache \
 
 ARG SAM_AUDIO_REF=68b48d48fff1ad776d3afefbe634eb5f5d60ba7b
 
-# pytorch (cuda 12.4 wheels, forward-compatible with the 12.8 host driver)
+# pytorch + xformers from the cu124 index so all cuda binaries match.
+# xformers is required by perception_models (core/transformer.py).
 RUN python -m pip install --no-cache-dir \
     torch==2.5.1 \
     torchaudio==2.5.1 \
     torchvision==0.20.1 \
+    xformers \
     --index-url https://download.pytorch.org/whl/cu124
 
 # explicit runtime deps — sam-audio's pyproject.toml has broken metadata
 # (installs as UNKNOWN-0.0.0 on stock pip), so we enumerate everything here.
-# xformers is intentionally excluded: not required and ships mismatched cuda.
 RUN python -m pip install --no-cache-dir \
     huggingface_hub \
     "transformers>=4.54.0" \
