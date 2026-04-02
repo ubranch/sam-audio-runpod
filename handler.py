@@ -117,7 +117,7 @@ processor = None
 
 
 def prepare_model_access() -> Optional[str]:
-    """resolve startup model access and prepare cache/offline flags."""
+    """resolve startup model access and prepare cache settings."""
     global LOCAL_MODEL_PATH
 
     configure_cache_environment()
@@ -129,15 +129,13 @@ def prepare_model_access() -> Optional[str]:
     log.info("cache config: torch_home %s", TORCH_CACHE_ROOT)
     log.info("hf_token: %s", "present" if hf_token else "missing")
 
+    os.environ.pop("HF_HUB_OFFLINE", None)
+    os.environ.pop("TRANSFORMERS_OFFLINE", None)
+
     if LOCAL_MODEL_PATH:
-        os.environ["HF_HUB_OFFLINE"] = "1"
-        os.environ["TRANSFORMERS_OFFLINE"] = "1"
         log.info("model source: /runpod-volume cache")
         log.info("cache reuse: enabled")
         return LOCAL_MODEL_PATH
-
-    os.environ.pop("HF_HUB_OFFLINE", None)
-    os.environ.pop("TRANSFORMERS_OFFLINE", None)
     log.info("model source: huggingface download")
     log.info("cache reuse: first-time download required")
     if hf_token:

@@ -126,6 +126,29 @@ class TestBootstrapWorker:
         assert "model source: /runpod-volume cache" in caplog.text
         assert "worker ready" in caplog.text
 
+    def test_bootstrap_clears_forced_offline_flags_on_cache_hit(self):
+        def assert_offline_flags_cleared(*, model_source):
+            assert model_source == "/runpod-volume/cache/snapshot"
+            assert "HF_HUB_OFFLINE" not in os.environ
+            assert "TRANSFORMERS_OFFLINE" not in os.environ
+
+        with patch.dict(
+            "os.environ",
+            {"HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1", "HF_TOKEN": ""},
+            clear=False,
+        ):
+            with patch.object(
+                handler,
+                "resolve_snapshot_path",
+                return_value="/runpod-volume/cache/snapshot",
+            ):
+                with patch.object(
+                    handler,
+                    "load_model",
+                    side_effect=assert_offline_flags_cleared,
+                ):
+                    handler.bootstrap_worker()
+
     def test_bootstrap_allows_public_download_without_token(self, caplog):
         caplog.set_level("INFO")
 
