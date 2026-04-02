@@ -248,7 +248,15 @@ def decode_audio(audio_url: Optional[str] = None, audio_base64: Optional[str] = 
     else:
         raise ValueError("Either audio_url or audio_base64 must be provided")
 
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as tmp:
+    # infer extension from url path so ffmpeg picks the right demuxer.
+    suffix = ".wav"
+    if audio_url:
+        path = urlparse(audio_url).path
+        ext = os.path.splitext(path)[1].lower()
+        if ext in (".mp3", ".flac", ".ogg", ".opus", ".m4a", ".aac", ".webm"):
+            suffix = ext
+
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
         tmp.write(audio_bytes)
         tmp.flush()
         wav, sr = torchaudio.load(tmp.name)
