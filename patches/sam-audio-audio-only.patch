@@ -1,3 +1,41 @@
+diff --git a/sam_audio/model/base.py b/sam_audio/model/base.py
+index 3aa3a57..8b96e23 100644
+--- a/sam_audio/model/base.py
++++ b/sam_audio/model/base.py
+@@ -18,13 +18,13 @@ class BaseModel(torch.nn.Module, ModelHubMixin):
+     def _from_pretrained(
+         cls,
+         *,
+-        model_id: str,
+-        cache_dir: str,
+-        force_download: bool,
+-        proxies: Optional[Dict],
+-        resume_download: bool,
+-        local_files_only: bool,
+-        token: Union[str, bool, None],
++        model_id: str | None = None,
++        cache_dir: str | None = None,
++        force_download: bool = False,
++        proxies: Optional[Dict] = None,
++        resume_download: bool | None = None,
++        local_files_only: bool = False,
++        token: Union[str, bool, None] = None,
+         map_location: str = "cpu",
+         strict: bool = True,
+         revision: Optional[str] = None,
+@@ -35,11 +35,9 @@ class BaseModel(torch.nn.Module, ModelHubMixin):
+         else:
+             cached_model_dir = snapshot_download(
+                 repo_id=model_id,
+-                revision=cls.revision,
++                revision=revision or cls.revision,
+                 cache_dir=cache_dir,
+                 force_download=force_download,
+-                proxies=proxies,
+-                resume_download=resume_download,
+                 token=token,
+                 local_files_only=local_files_only,
+             )
 diff --git a/sam_audio/processor.py b/sam_audio/processor.py
 index 7935644..1c585c2 100644
 --- a/sam_audio/processor.py
