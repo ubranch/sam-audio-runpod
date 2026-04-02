@@ -256,10 +256,14 @@ def decode_audio(audio_url: Optional[str] = None, audio_base64: Optional[str] = 
         if ext in (".mp3", ".flac", ".ogg", ".opus", ".m4a", ".aac", ".webm"):
             suffix = ext
 
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
-        tmp.write(audio_bytes)
-        tmp.flush()
-        wav, sr = torchaudio.load(tmp.name)
+    # write to a closed temp file so ffmpeg can open it without contention.
+    fd, tmp_path = tempfile.mkstemp(suffix=suffix)
+    try:
+        os.write(fd, audio_bytes)
+        os.close(fd)
+        wav, sr = torchaudio.load(tmp_path)
+    finally:
+        os.unlink(tmp_path)
 
     if sr != SAMPLE_RATE:
         wav = torchaudio.functional.resample(wav, sr, SAMPLE_RATE)
