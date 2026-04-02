@@ -117,14 +117,44 @@ class TestBootstrapWorker:
                     "resolve_snapshot_path",
                     return_value="/runpod-volume/cache/snapshot",
                 ) as resolve_snapshot_path:
-                    with patch.object(handler, "load_model") as load_model:
-                        handler.bootstrap_worker()
+                    with patch.object(handler, "validate_gpu_runtime") as validate_gpu_runtime:
+                        with patch.object(handler, "load_model") as load_model:
+                            handler.bootstrap_worker()
 
+        validate_gpu_runtime.assert_called_once_with()
         resolve_snapshot_path.assert_called_once_with(handler.MODEL_ID)
         load_model.assert_called_once_with(model_source="/runpod-volume/cache/snapshot")
         assert "hf_token: missing" in caplog.text
         assert "model source: /runpod-volume cache" in caplog.text
         assert "worker ready" in caplog.text
+
+    def test_bootstrap_checks_gpu_before_model_load(self):
+        call_order = []
+
+        def record_gpu_preflight():
+            call_order.append("gpu")
+
+        def record_prepare_model_access():
+            call_order.append("prepare")
+            return "/runpod-volume/cache/snapshot"
+
+        def record_load_model(*, model_source):
+            call_order.append(("load", model_source))
+
+        with patch.object(handler, "validate_gpu_runtime", side_effect=record_gpu_preflight):
+            with patch.object(
+                handler,
+                "prepare_model_access",
+                side_effect=record_prepare_model_access,
+            ):
+                with patch.object(handler, "load_model", side_effect=record_load_model):
+                    handler.bootstrap_worker()
+
+        assert call_order == [
+            "gpu",
+            "prepare",
+            ("load", "/runpod-volume/cache/snapshot"),
+        ]
 
     def test_bootstrap_clears_forced_offline_flags_on_cache_hit(self):
         def assert_offline_flags_cleared(*, model_source):
@@ -137,26 +167,28 @@ class TestBootstrapWorker:
             {"HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1", "HF_TOKEN": ""},
             clear=False,
         ):
-            with patch.object(
-                handler,
-                "resolve_snapshot_path",
-                return_value="/runpod-volume/cache/snapshot",
-            ):
+            with patch.object(handler, "validate_gpu_runtime"):
                 with patch.object(
                     handler,
-                    "load_model",
-                    side_effect=assert_offline_flags_cleared,
+                    "resolve_snapshot_path",
+                    return_value="/runpod-volume/cache/snapshot",
                 ):
-                    handler.bootstrap_worker()
+                    with patch.object(
+                        handler,
+                        "load_model",
+                        side_effect=assert_offline_flags_cleared,
+                    ):
+                        handler.bootstrap_worker()
 
     def test_bootstrap_allows_public_download_without_token(self, caplog):
         caplog.set_level("INFO")
 
         with patch.dict("os.environ", {"HF_TOKEN": ""}, clear=False):
             with patch.object(handler, "LOCAL_MODEL_PATH", None):
-                with patch.object(handler, "resolve_snapshot_path", return_value=None):
-                    with patch.object(handler, "load_model") as load_model:
-                        handler.bootstrap_worker()
+                with patch.object(handler, "validate_gpu_runtime"):
+                    with patch.object(handler, "resolve_snapshot_path", return_value=None):
+                        with patch.object(handler, "load_model") as load_model:
+                            handler.bootstrap_worker()
 
         load_model.assert_called_once_with(model_source=None)
         assert "model source: huggingface download" in caplog.text
@@ -215,6 +247,24 @@ class TestLoadModel:
             handler.MODEL_ID,
             cache_dir=handler.HF_CACHE_ROOT,
         )
+
+
+class TestValidateGpuRuntime:
+    def test_validate_gpu_runtime_initializes_cuda(self, caplog):
+        caplog.set_level("INFO")
+
+        with patch.object(handler.torch.cuda, "is_available", return_value=True):
+            with patch.object(handler.torch, "empty") as empty:
+                with patch.object(handler.torch.cuda, "get_device_name", return_value="mock gpu"):
+                    handler.validate_gpu_runtime()
+
+        empty.assert_called_once_with(1, device="cuda")
+        assert "gpu preflight ok: mock gpu" in caplog.text
+
+    def test_validate_gpu_runtime_raises_when_cuda_is_unavailable(self):
+        with patch.object(handler.torch.cuda, "is_available", return_value=False):
+            with pytest.raises(RuntimeError, match="cuda is not available to torch"):
+                handler.validate_gpu_runtime()
 
 
 class TestMain:

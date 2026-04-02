@@ -116,6 +116,21 @@ model = None
 processor = None
 
 
+def validate_gpu_runtime() -> None:
+    """fail fast if torch cannot initialize cuda on this worker."""
+    log.info("gpu preflight start")
+    log.info("torch build: version %s, cuda %s", torch.__version__, torch.version.cuda)
+    try:
+        if not torch.cuda.is_available():
+            raise RuntimeError("cuda is not available to torch")
+        probe = torch.empty(1, device="cuda")
+        del probe
+        log.info("gpu preflight ok: %s", torch.cuda.get_device_name(0))
+    except Exception:
+        log.exception("gpu preflight failed")
+        raise
+
+
 def prepare_model_access() -> Optional[str]:
     """resolve startup model access and prepare cache settings."""
     global LOCAL_MODEL_PATH
@@ -185,6 +200,7 @@ def load_model(model_source=_MODEL_SOURCE_UNSET):
 def bootstrap_worker():
     """warm the worker before registering it with runpod."""
     log.info("worker bootstrap start")
+    validate_gpu_runtime()
     model_source = prepare_model_access()
     load_model(model_source=model_source)
     log.info("worker ready")
