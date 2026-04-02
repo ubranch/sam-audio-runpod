@@ -47,8 +47,15 @@ RUN pip install --no-cache-dir \
     timm \
     ftfy \
     xformers \
-    iopath
+    iopath \
+    regex \
+    fvcore \
+    av \
+    networkx \
+    parameterized
 
+# imagebind and pytorchvideo have import-time runtime deps that are not all
+# covered by sam-audio itself, so install them explicitly before bootstrap.
 RUN pip install --no-cache-dir --no-deps \
     git+https://github.com/facebookresearch/ImageBind.git \
     git+https://github.com/facebookresearch/dacvae.git \
@@ -69,8 +76,9 @@ RUN git clone --filter=blob:none https://github.com/facebookresearch/sam-audio.g
     git apply /tmp/patches/sam-audio-audio-only.patch
 ENV PYTHONPATH="/opt/sam-audio:/opt/perception-models"
 
-# fail the image build if the patched audio-only import path is still broken.
-RUN python -c "from sam_audio import SAMAudio, SAMAudioProcessor; from core.audio_visual_encoder.transforms import AudioProcessor, PEAudioFrameTransform; print('sam_audio runtime imports ok')"
+# fail the image build if the patched audio-only import path is still broken,
+# or if imagebind's runtime dependency chain is incomplete.
+RUN python -c "from sam_audio import SAMAudio, SAMAudioProcessor; from sam_audio.ranking.imagebind import __imagebind_exists__; from core.audio_visual_encoder.transforms import AudioProcessor, PEAudioFrameTransform; assert __imagebind_exists__, 'imagebind runtime deps missing'; print('sam_audio runtime imports ok')"
 
 # runpod handler deps
 RUN pip install --no-cache-dir runpod==1.8.2 requests==2.32.5
